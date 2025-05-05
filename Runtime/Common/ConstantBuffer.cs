@@ -243,6 +243,47 @@ namespace UnityEngine.Rendering
             m_GPUConstantBuffer = new ComputeBuffer(1, UnsafeUtility.SizeOf<CBType>(), ComputeBufferType.Constant);
         }
 
+        #region Extension
+        
+        public static void PushGlobal<CBType>(ComputeCommandBuffer cmd, in CBType data, int shaderId) where CBType : struct
+        {
+            var cb = ConstantBufferSingleton<CBType>.instance;
+
+            cb.UpdateData(cmd, data);
+            cb.SetGlobal(cmd, shaderId);
+        }
+
+        public static void Push<CBType>(ComputeCommandBuffer cmd, in CBType data, ComputeShader cs, int shaderId) where CBType : struct
+        {
+            var cb = ConstantBufferSingleton<CBType>.instance;
+
+            cb.UpdateData(cmd, data);
+            cb.Set(cmd, cs, shaderId);
+        }
+        
+        public void SetGlobal(ComputeCommandBuffer cmd, int shaderId)
+        {
+            m_GlobalBindings.Add(shaderId);
+            cmd.SetGlobalConstantBuffer(m_GPUConstantBuffer, shaderId, 0, m_GPUConstantBuffer.stride);
+        }
+        
+        public void Set(ComputeCommandBuffer cmd, ComputeShader cs, int shaderId)
+        {
+            cmd.SetComputeConstantBufferParam(cs, shaderId, m_GPUConstantBuffer, 0, m_GPUConstantBuffer.stride);
+        }
+
+        
+        public void UpdateData(ComputeCommandBuffer cmd, in CBType data)
+        {
+            m_Data[0] = data;
+#if UNITY_2021_1_OR_NEWER
+            cmd.SetBufferData(m_GPUConstantBuffer, m_Data);
+#else
+            cmd.SetComputeBufferData(m_GPUConstantBuffer, m_Data);
+#endif
+        }
+        
+        #endregion
         /// <summary>
         /// Update the GPU data of the constant buffer via a command buffer.
         /// </summary>
