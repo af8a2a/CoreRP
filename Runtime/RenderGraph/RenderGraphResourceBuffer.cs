@@ -88,6 +88,21 @@ namespace UnityEngine.Rendering.RenderGraphModule
         }
 
         /// <summary>
+        /// BufferDesc constructor.
+        /// </summary>
+        /// <param name="count">Number of elements in the buffer.</param>
+        /// <param name="stride">Size of one element in the buffer.</param>
+        /// <param name="name">buffer name.</param>
+        public BufferDesc(int count, int stride, string name)
+            : this()
+        {
+            this.count = count;
+            this.stride = stride;
+            this.name = name;
+            this.usageFlags = GraphicsBuffer.UsageFlags.None;
+        }
+
+        /// <summary>
         /// Hash function
         /// </summary>
         /// <returns>The texture descriptor hash.</returns>
