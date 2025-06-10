@@ -543,6 +543,11 @@ namespace UnityEngine.Rendering
         /// <param name="argsOffset">[See CommandBuffer documentation](https://docs.unity3d.com/ScriptReference/Rendering.CommandBuffer.DispatchCompute.html)</param>
         public void DispatchCompute(ComputeShader computeShader, int kernelIndex, GraphicsBuffer indirectBuffer, uint argsOffset)  {  m_WrappedCommandBuffer.DispatchCompute(computeShader, kernelIndex, indirectBuffer, argsOffset); }
 
+        
+                
+        public void SetRayTracingShaderPass(RayTracingShader rayTracingShader, string passName) { m_WrappedCommandBuffer.SetRayTracingShaderPass(rayTracingShader, passName); }
+        
+        
         /// <summary>Wraps [BuildRayTracingAccelerationStructure](https://docs.unity3d.com/ScriptReference/Rendering.CommandBuffer.BuildRayTracingAccelerationStructure.html) on a CommandBuffer.</summary>
         /// <param name="accelerationStructure">[See CommandBuffer documentation](https://docs.unity3d.com/ScriptReference/Rendering.CommandBuffer.BuildRayTracingAccelerationStructure.html)</param>
         public void BuildRayTracingAccelerationStructure(RayTracingAccelerationStructure accelerationStructure)  {  m_WrappedCommandBuffer.BuildRayTracingAccelerationStructure(accelerationStructure); }
