@@ -8,7 +8,7 @@ using Unity.Collections.LowLevel.Unsafe;
 namespace UnityEngine.Rendering.RenderGraphModule.NativeRenderPassCompiler
 {
     // Wrapper struct to allow storing strings in a DynamicArray which requires a type with a parameterless constructor
-    internal struct Name
+    internal readonly struct Name
     {
         public readonly string name;
         public readonly int utf8ByteCount;
@@ -153,10 +153,15 @@ namespace UnityEngine.Rendering.RenderGraphModule.NativeRenderPassCompiler
         public NativeList<SubPassDescriptor> nativeSubPassData; //Tighty packed list of per nrp subpasses
 
         // resources can be added as fragment both as input and output so make sure not to add them twice (return true upon new addition)
-        public bool AddToFragmentList(TextureAccess access, int listFirstIndex, int numItems)
+        public bool TryAddToFragmentList(TextureAccess access, int listFirstIndex, int numItems, out string errorMessage)
         {
+            errorMessage = null;
 #if DEVELOPMENT_BUILD || UNITY_EDITOR
-            if (access.textureHandle.handle.type != RenderGraphResourceType.Texture) new Exception("Only textures can be used as a fragment attachment.");
+            if (access.textureHandle.handle.type != RenderGraphResourceType.Texture)
+            {
+                errorMessage = RenderGraph.RenderGraphExceptionMessages.k_NonTextureAsAttachmentError;
+                return false;
+            }
 #endif
             for (var i = listFirstIndex; i < listFirstIndex + numItems; ++i)
             {
@@ -168,7 +173,7 @@ namespace UnityEngine.Rendering.RenderGraphModule.NativeRenderPassCompiler
                     {
                         //this would mean you're trying to attach say both v1 and v2 of a resource to the same pass as an attachment
                         //this is not allowed
-                        throw new Exception("Trying to UseFragment two versions of the same resource");
+                        errorMessage = RenderGraph.RenderGraphExceptionMessages.k_OneResourceTwoVersionsError;
                     }
 #endif
                     return false;
@@ -179,13 +184,12 @@ namespace UnityEngine.Rendering.RenderGraphModule.NativeRenderPassCompiler
             // not int the middle of lists
             Debug.Assert(listFirstIndex + numItems == fragmentData.Length);
 
-            fragmentData.Add(new PassFragmentData()
-            {
-                resource = access.textureHandle.handle,
-                accessFlags = access.flags,
-                mipLevel = access.mipLevel,
-                depthSlice = access.depthSlice,
-            });
+            fragmentData.Add(new PassFragmentData(
+                access.textureHandle.handle,
+                access.flags,
+                access.mipLevel,
+                access.depthSlice
+            ));
             return true;
         }
 
@@ -202,8 +206,9 @@ namespace UnityEngine.Rendering.RenderGraphModule.NativeRenderPassCompiler
         public string GetResourceVersionedName(ResourceHandle h) => GetResourceName(h) + " V" + h.version;
 
         // resources can be added as fragment both as input and output so make sure not to add them twice (return true upon new addition)
-        public bool AddToRandomAccessResourceList(ResourceHandle h, int randomWriteSlotIndex, bool preserveCounterValue, int listFirstIndex, int numItems)
+        public bool TryAddToRandomAccessResourceList(ResourceHandle h, int randomWriteSlotIndex, bool preserveCounterValue, int listFirstIndex, int numItems, out string errorMessage)
         {
+            errorMessage = null;
             for (var i = listFirstIndex; i < listFirstIndex + numItems; ++i)
             {
                 if (randomAccessResourceData[i].resource.index == h.index && randomAccessResourceData[i].resource.type == h.type)
@@ -212,7 +217,7 @@ namespace UnityEngine.Rendering.RenderGraphModule.NativeRenderPassCompiler
                     {
                         //this would mean you're trying to attach say both v1 and v2 of a resource to the same pass as an attachment
                         //this is not allowed
-                        throw new Exception("Trying to UseTextureRandomWrite two versions of the same resource");
+                        errorMessage = RenderGraph.RenderGraphExceptionMessages.k_UseTextureRandWriteTwoVersionsError;
                     }
                     return false;
                 }
@@ -222,12 +227,7 @@ namespace UnityEngine.Rendering.RenderGraphModule.NativeRenderPassCompiler
             // not int the middle of lists
             Debug.Assert(listFirstIndex + numItems == randomAccessResourceData.Length);
 
-            randomAccessResourceData.Add(new PassRandomWriteData()
-            {
-                resource = h,
-                index = randomWriteSlotIndex,
-                preserveCounterValue = preserveCounterValue
-            });
+            randomAccessResourceData.Add(new PassRandomWriteData(h, randomWriteSlotIndex, preserveCounterValue));
             return true;
         }
 
@@ -248,7 +248,7 @@ namespace UnityEngine.Rendering.RenderGraphModule.NativeRenderPassCompiler
         }
 
         // Helper to loop over native passes
-        public struct NativePassIterator
+        public ref struct NativePassIterator
         {
             readonly CompilerContextData m_Ctx;
             int m_Index;

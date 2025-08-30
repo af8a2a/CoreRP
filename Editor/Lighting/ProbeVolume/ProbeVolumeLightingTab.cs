@@ -112,18 +112,18 @@ namespace UnityEngine.Rendering
         bool m_TempBakingSet = false;
         bool m_Initialized = false;
 
-        ProbeVolumeBakingSet m_ActiveSet;
+        ProbeVolumeBakingSetWeakReference m_ActiveSet = new();
         ProbeVolumeBakingSet activeSet
         {
-            get => m_ActiveSet;
+            get => m_ActiveSet.Get();
             set
             {
-                if (ReferenceEquals(m_ActiveSet, value)) return;
-                if (m_TempBakingSet) Object.DestroyImmediate(m_ActiveSet);
-                m_ActiveSet = value;
+                if (ReferenceEquals(m_ActiveSet.Get(), value)) return;
+                if (m_TempBakingSet) Object.DestroyImmediate(m_ActiveSet.Get());
+                m_ActiveSet.Set(value);
                 m_TempBakingSet = false;
-                if (m_ActiveSet == null) return;
-                m_SingleSceneMode = m_ActiveSet.singleSceneMode;
+                if (m_ActiveSet.Get() == null) return;
+                m_SingleSceneMode = m_ActiveSet.Get().singleSceneMode;
                 InitializeSceneList();
             }
         }
@@ -169,14 +169,14 @@ namespace UnityEngine.Rendering
 
         bool FindActiveSet()
         {
-            if (m_ActiveSet == null)
+            if (m_ActiveSet.Get() == null)
             {
                 activeSet = ProbeVolumeBakingSet.GetBakingSetForScene(SceneManager.GetActiveScene());
                 for (int i = 0; activeSet == null && i < SceneManager.sceneCount; i++)
                     activeSet = ProbeVolumeBakingSet.GetBakingSetForScene(SceneManager.GetSceneAt(i));
             }
 
-            return m_ActiveSet != null;
+            return m_ActiveSet.Get() != null;
         }
 
         void Initialize()
@@ -359,6 +359,8 @@ namespace UnityEngine.Rendering
             {
                 if (newSet != null) { EditorUtility.SetDirty(newSet); newSet.singleSceneMode = false; }
                 activeSet = newSet;
+
+                ProbeReferenceVolume.instance.Clear();
             }
 
             if (activeSet != null)
@@ -493,7 +495,7 @@ namespace UnityEngine.Rendering
                 set = ScriptableObject.CreateInstance<ProbeVolumeBakingSet>();
                 set.SetDefaults();
 
-                ProbeReferenceVolume.instance.AddPendingSceneRemoval(sceneGUID);
+                ProbeReferenceVolume.instance.Clear();
             }
 
             EditorUtility.SetDirty(set);
@@ -961,6 +963,9 @@ namespace UnityEngine.Rendering
         {
             if (!prv.isInitialized || !prv.enabledBySRP)
                 return false;
+
+            // Always baking with a fresh activeSet
+            activeSet = null;
 
             // In case UI was never opened we have to setup some stuff
             FindActiveSet();

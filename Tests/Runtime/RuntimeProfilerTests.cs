@@ -55,11 +55,10 @@ namespace UnityEngine.Rendering.Tests
         }
     }
 
-    // Fails on WebGL, Oculus Quest and Embedded Platforms (GLES3).
+    // Fails on WebGL, Oculus Quest and Switch.
     // Unfortunately, there is no good way to exclude Oculus Quest from the test without excluding all Android devices.
     // https://jira.unity3d.com/browse/GFXFOUND-559
-    // https://jira.unity3d.com/browse/PLAT-13842 (GLES3 gpuFrameTime is currently only available on Android)
-    [UnityPlatform(exclude = new RuntimePlatform[] { RuntimePlatform.WebGLPlayer, RuntimePlatform.Android, RuntimePlatform.EmbeddedLinuxArm64 })]
+    [UnityPlatform(exclude = new RuntimePlatform[] { RuntimePlatform.WebGLPlayer, RuntimePlatform.Android, RuntimePlatform.Switch })]
     class RuntimeProfilerTests : RuntimeProfilerTestBase
     {
         [UnityTest]

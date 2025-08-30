@@ -7,12 +7,12 @@ using UnityEngine.Scripting.APIUpdating;
 
 namespace UnityEngine.Rendering.RenderGraphModule
 {
-    internal struct TextureAccess
+    internal readonly struct TextureAccess
     {
-        public TextureHandle textureHandle;
-        public int mipLevel;
-        public int depthSlice;
-        public AccessFlags flags;
+        public readonly TextureHandle textureHandle;
+        public readonly int mipLevel;
+        public readonly int depthSlice;
+        public readonly AccessFlags flags;
 
         public TextureAccess(TextureHandle handle, AccessFlags flags, int mipLevel, int depthSlice)
         {
@@ -20,6 +20,14 @@ namespace UnityEngine.Rendering.RenderGraphModule
             this.flags = flags;
             this.mipLevel = mipLevel;
             this.depthSlice = depthSlice;
+        }
+        
+        public TextureAccess(TextureAccess access, TextureHandle handle)
+        {
+            this.textureHandle = handle;
+            this.flags = access.flags;
+            this.mipLevel = access.mipLevel;
+            this.depthSlice = access.depthSlice;
         }
     }
 
@@ -162,7 +170,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
         public int width;
         ///<summary>Texture height.</summary>
         public int height;
-        ///<summary>Number of texture slices..</summary>
+        ///<summary>Number of texture slices.</summary>
         public int slices;
         ///<summary>Texture scale.</summary>
         public Vector2 scale;
@@ -196,7 +204,12 @@ namespace UnityEngine.Rendering.RenderGraphModule
         public bool useDynamicScale;
         ///<summary>[See Dynamic Resolution documentation](https://docs.unity3d.com/Manual/DynamicResolution.html)</summary>
         public bool useDynamicScaleExplicit;
-        ///<summary>Memory less flag.</summary>
+        ///<summary>
+        ///[See Memoryless documentation](https://docs.unity3d.com/ScriptReference/RenderTextureMemoryless.html)
+        ///</summary>
+        ///<remarks>
+        ///If this is a Render Graph created resource only used in a single raster render pass, and not sampled (no UseTexture() usage), Render Graph will automatically set this resource as memoryless.
+        ///</remarks>
         public RenderTextureMemoryless memoryless;
         ///<summary>Special treatment of the VR eye texture used in stereoscopic rendering.</summary>
         public VRTextureUsage vrUsage;

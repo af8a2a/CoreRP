@@ -21,6 +21,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
         public bool allowPassCulling { get; protected set; }
         public bool allowGlobalState { get; protected set; }
         public bool enableFoveatedRasterization { get; protected set; }
+        public ExtendedFeatureFlags extendedFeatureFlags { get; protected set; }
 
         // Before using the AccessFlags use resourceHandle.isValid()
         // to make sure that the data in the colorBuffer/fragmentInput/randomAccessResource buffers are up to date
@@ -65,6 +66,10 @@ namespace UnityEngine.Rendering.RenderGraphModule
         public bool useAllGlobalTextures;
 
         public List<ResourceHandle> implicitReadsList = new List<ResourceHandle>();
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        public RenderGraph.DebugData.PassScriptInfo debugScriptInfo { get; set; }
+#endif
 
         public RenderGraphPass()
         {
@@ -255,7 +260,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
         {
             Debug.Assert(index < RenderGraph.kMaxMRTCount && index >= 0);
             colorBufferMaxIndex = Math.Max(colorBufferMaxIndex, index);
-            colorBufferAccess[index].textureHandle = resource;
+            colorBufferAccess[index] = new TextureAccess(colorBufferAccess[index], resource);
             AddResourceWrite(resource.handle);
         }
 
@@ -267,16 +272,15 @@ namespace UnityEngine.Rendering.RenderGraphModule
             if (colorBufferAccess[index].textureHandle.handle.Equals(resource.handle) || !colorBufferAccess[index].textureHandle.IsValid())
             {
                 colorBufferMaxIndex = Math.Max(colorBufferMaxIndex, index);
-                colorBufferAccess[index].textureHandle = resource;
-                colorBufferAccess[index].flags = accessFlags;
-                colorBufferAccess[index].mipLevel = mipLevel;
-                colorBufferAccess[index].depthSlice = depthSlice;
+                colorBufferAccess[index] = new TextureAccess(resource, accessFlags, mipLevel, depthSlice);
             }
             else
             {
 #if DEVELOPMENT_BUILD || UNITY_EDITOR
                 // You tried to do SetRenderAttachment(tex1, 1, ..); SetRenderAttachment(tex2, 1, ..); that is not valid for different textures on the same index
-                throw new InvalidOperationException("You can only bind a single texture to an MRT index. Verify your indexes are correct.");
+                throw new InvalidOperationException(
+                    $"In pass '{name}' when trying to call SetRenderAttachment with resource of type {resource.handle.type} at index {index} - " +
+                    RenderGraph.RenderGraphExceptionMessages.k_MoreThanOneResourceForMRTIndex);
 #endif
             }
         }
@@ -289,16 +293,15 @@ namespace UnityEngine.Rendering.RenderGraphModule
             if (fragmentInputAccess[index].textureHandle.handle.Equals(resource.handle) || !fragmentInputAccess[index].textureHandle.IsValid())
             {
                 fragmentInputMaxIndex = Math.Max(fragmentInputMaxIndex, index);
-                fragmentInputAccess[index].textureHandle = resource;
-                fragmentInputAccess[index].flags = accessFlags;
-                fragmentInputAccess[index].mipLevel = mipLevel;
-                fragmentInputAccess[index].depthSlice = depthSlice;
+                fragmentInputAccess[index] = new TextureAccess(resource, accessFlags, mipLevel, depthSlice);
             }
             else
             {
 #if DEVELOPMENT_BUILD || UNITY_EDITOR
                 // You tried to do SetRenderAttachment(tex1, 1, ..); SetRenderAttachment(tex2, 1, ..); that is not valid for different textures on the same index
-                throw new InvalidOperationException("You can only bind a single texture to an fragment input index. Verify your indexes are correct.");
+                throw new InvalidOperationException(
+                    $"In pass '{name}' when trying to call SetInputAttachment with resource of type {resource.handle.type} at index {index} - " +
+                    RenderGraph.RenderGraphExceptionMessages.k_MoreThanOneTextureForFragInputIndex);
 #endif
             }
         }
@@ -318,7 +321,9 @@ namespace UnityEngine.Rendering.RenderGraphModule
             else
             {
                 // You tried to do SetRenderAttachment(tex1, 1, ..); SetRenderAttachment(tex2, 1, ..); that is not valid for different textures on the same index
-                throw new InvalidOperationException("You can only bind a single texture to an random write input index. Verify your indexes are correct.");
+                throw new InvalidOperationException(
+                    $"In pass '{name}' when trying to call SetRandomAccessAttachment/UseBufferRandomAccess with resource of type {resource.type} at index {index} - " +
+                    RenderGraph.RenderGraphExceptionMessages.k_MoreThanOneTextureRandomWriteInputIndex);
             }
         }
 
@@ -345,7 +350,9 @@ namespace UnityEngine.Rendering.RenderGraphModule
 #if DEVELOPMENT_BUILD || UNITY_EDITOR
             else
             {
-                throw new InvalidOperationException("You can only set a single depth texture per pass.");
+                throw new InvalidOperationException(
+                    $"In pass '{name}' when trying to call SetRenderAttachmentDepth with resource of type {resource.handle.type} at index {index} - " +
+                    RenderGraph.RenderGraphExceptionMessages.k_MultipleDepthTextures);
             }
 #endif
         }
@@ -362,7 +369,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
                 var res = resources.GetTextureResource(handle);
                 var graphicsResource = res.graphicsResource;
                 ref var desc = ref res.desc;
-                
+
                 var externalTexture = graphicsResource.externalTexture;
                 if (externalTexture != null) // External texture
                 {
@@ -427,7 +434,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
                 }
             }
         }
-        
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         static void ComputeHashForTextureAccess(ref HashFNV1A32 generator, in ResourceHandle handle, in TextureAccess textureAccess)
         {
@@ -583,6 +590,11 @@ namespace UnityEngine.Rendering.RenderGraphModule
                 }
             }
         }
+
+        public void SetExtendedFeatureFlags(ExtendedFeatureFlags value)
+        {
+            extendedFeatureFlags |= value;
+        }
     }
 
     // This used to have an extra generic argument 'RenderGraphContext' abstracting the context and avoiding
@@ -628,6 +640,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
     }
 
     [DebuggerDisplay("RenderPass: {name} (Index:{index} Async:{enableAsyncCompute})")]
+    [Obsolete("RenderGraphPass is deprecated, use RasterRenderGraphPass/ComputeRenderGraphPass/UnsafeRenderGraphPass instead.")]
     internal sealed class RenderGraphPass<PassData> : BaseRenderGraphPass<PassData, RenderGraphContext>
         where PassData : class, new()
     {

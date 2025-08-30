@@ -8,6 +8,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
     /// Use this struct to set up a new Render Pass.
     /// </summary>
     [MovedFrom(true, "UnityEngine.Experimental.Rendering.RenderGraphModule", "UnityEngine.Rendering.RenderGraphModule")]
+    [Obsolete("RenderGraphBuilder is deprecated, use IComputeRenderGraphBuilder/IRasterRenderGraphBuilder/IUnsafeRenderGraphBuilder instead.")]
     public struct RenderGraphBuilder : IDisposable
     {
         RenderGraphPass m_RenderPass;
@@ -315,6 +316,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
             if (m_Disposed)
                 return;
 
+            m_RenderGraph.RenderGraphState = RenderGraphState.RecordingGraph;
             m_RenderGraph.OnPassAdded(m_RenderPass);
             m_Disposed = true;
         }

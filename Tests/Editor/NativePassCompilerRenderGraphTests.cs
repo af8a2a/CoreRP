@@ -68,10 +68,21 @@ namespace UnityEngine.Rendering.Tests
             return result;
         }
 
+        [OneTimeSetUp]
+        public void OneTimeSetUp()
+        {
+            NativePassCompiler.s_ForceGenerateAuditsForTests = true;
+        }
+
+        [OneTimeTearDown]
+        public void OneTimeTearDown()
+        {
+            NativePassCompiler.s_ForceGenerateAuditsForTests = false;
+        }
+
         RenderGraph AllocateRenderGraph()
         {
             RenderGraph g = new RenderGraph();
-            g.nativeRenderPassesEnabled = true;
             return g;
         }
 
@@ -1451,7 +1462,7 @@ namespace UnityEngine.Rendering.Tests
                 builder.SetRenderFunc((RenderGraphTestPassData data, RasterGraphContext context) => { });
                 builder.AllowPassCulling(false);
             }
-            
+
             // Render Pass
             //   attachments: [extraBuffers[0], extraBuffers[1]]
             //   subpass 0: color outputs : [0]
