@@ -119,6 +119,9 @@ namespace UnityEngine.Rendering.RenderGraphModule
             shadingRateFragmentSize = ShadingRateFragmentSize.FragmentSize1x1;
             primitiveShadingRateCombiner = ShadingRateCombiner.Keep;
             fragmentShadingRateCombiner = ShadingRateCombiner.Keep;
+
+            // Invalidate ExtendedFeatureFlags
+            extendedFeatureFlags = ExtendedFeatureFlags.None;
         }
 
         // Check if the pass has any render targets set-up
@@ -368,7 +371,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
             {
                 var res = resources.GetTextureResource(handle);
                 var graphicsResource = res.graphicsResource;
-                ref var desc = ref res.desc;
+                ref readonly var desc = ref res.desc;
 
                 var externalTexture = graphicsResource.externalTexture;
                 if (externalTexture != null) // External texture
@@ -413,7 +416,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
             }
             else
             {
-                var desc = resources.GetTextureResourceDesc(handle);
+                ref readonly var desc = ref resources.GetTextureResourceDesc(handle);
                 generator.Append((int) desc.format);
                 generator.Append((int) desc.dimension);
                 generator.Append((int) desc.msaaSamples);
@@ -453,6 +456,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
             generator.Append(allowPassCulling);
             generator.Append(allowGlobalState);
             generator.Append(enableFoveatedRasterization);
+            generator.Append(extendedFeatureFlags);
 
             var depthHandle = depthAccess.textureHandle.handle;
             if (depthHandle.IsValid())
@@ -551,6 +555,16 @@ namespace UnityEngine.Rendering.RenderGraphModule
                 generator.Append(implicitReadsList[i].index);
 
             generator.Append(GetRenderFuncHash());
+        }
+
+        public void SetShadingRateImageRaw(in TextureHandle shadingRateImage)
+        {
+            if (ShadingRateInfo.supportsPerImageTile)
+            {
+                hasShadingRateImage = true;
+                // shading rate image access flag is always read, only 1 mip and 1 slice
+                shadingRateAccess = new TextureAccess(shadingRateImage, AccessFlags.Read, 0, 0);
+            }
         }
 
         public void SetShadingRateImage(in TextureHandle shadingRateImage, AccessFlags accessFlags, int mipLevel, int depthSlice)

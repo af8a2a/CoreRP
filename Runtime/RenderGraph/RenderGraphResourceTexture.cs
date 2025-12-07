@@ -14,21 +14,63 @@ namespace UnityEngine.Rendering.RenderGraphModule
         public readonly int depthSlice;
         public readonly AccessFlags flags;
 
-        public TextureAccess(TextureHandle handle, AccessFlags flags, int mipLevel, int depthSlice)
+        public TextureAccess(in TextureHandle handle, AccessFlags flags, int mipLevel, int depthSlice)
         {
             this.textureHandle = handle;
             this.flags = flags;
             this.mipLevel = mipLevel;
             this.depthSlice = depthSlice;
         }
-        
-        public TextureAccess(TextureAccess access, TextureHandle handle)
+
+        public TextureAccess(in TextureAccess access, in TextureHandle handle)
         {
             this.textureHandle = handle;
             this.flags = access.flags;
             this.mipLevel = access.mipLevel;
             this.depthSlice = access.depthSlice;
         }
+    }
+
+    /// <summary>
+    /// Represents the origin of UV coordinates for a texture. It represents how Unity stores the content,
+    /// independent of the active graphics API. The UV coordinate (0,0) in the shader will either sample
+    /// the bottom left pixel of the image, or the top left pixel (flipped).
+    /// </summary>
+    public enum TextureUVOrigin
+    {
+        /// <summary>
+        /// The UV coordinate (0,0) in a shader will sample the BOTTOM left texel of the texture. This matched the OpenGL standard, which is also the Unity standard for textures.
+        /// To ensure this behavior, Unity will store the content for texture upside down (flipped) on modern graphics APIs.
+        /// </summary>
+        BottomLeft,
+        /// <summary>
+        /// The UV coordinate (0,0) in a shader will sample the TOP left texel of the texture. This matches the standard of modern graphics APIs (Vulkan, DX, Metal,...).
+        /// The actual backbuffer will have a TopLeft orientation when a modern graphics API is active.
+        /// </summary>
+        TopLeft
+    }
+
+    /// <summary>
+    /// Represents the origin of UV coordinates for a texture. It represents how Unity stores the content,
+    /// independent of the active graphics API. The UV coordinate (0,0) in the shader will either sample
+    /// the bottom left pixel of the image, or the top left pixel (flipped).
+    /// </summary>
+    internal enum TextureUVOriginSelection
+    {
+        /// <summary>
+        /// The UV coordinate (0,0) in a shader will sample the BOTTOM left texel of the texture. This matched the OpenGL standard, which is also the Unity standard for textures.
+        /// To ensure this behavior, Unity will store the content for texture upside down (flipped) on modern graphics APIs.
+        /// </summary>
+        BottomLeft,
+        /// <summary>
+        /// The UV coordinate (0,0) in a shader will sample the TOP left texel of the texture. This matches the standard of modern graphics APIs (Vulkan, DX, Metal,...).
+        /// The actual backbuffer will have a TopLeft orientation when a modern graphics API is active.
+        /// </summary>
+        TopLeft,
+        /// <summary>
+        /// The orientation has not been assigned yet.
+        /// </summary>
+        Unknown
     }
 
 
@@ -55,7 +97,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
     /// </summary>
     [DebuggerDisplay("Texture ({handle.index})")]
     [MovedFrom(true, "UnityEngine.Experimental.Rendering.RenderGraphModule", "UnityEngine.Rendering.RenderGraphModule")]
-    public struct TextureHandle
+    public readonly struct TextureHandle
     {
         private static TextureHandle s_NullHandle = new TextureHandle();
 
@@ -65,9 +107,9 @@ namespace UnityEngine.Rendering.RenderGraphModule
         /// <value>A null texture handle.</value>
         public static TextureHandle nullHandle { get { return s_NullHandle; } }
 
-        internal ResourceHandle handle;
+        internal readonly ResourceHandle handle;
 
-        private bool builtin;
+        private readonly bool builtin;
 
         internal TextureHandle(in ResourceHandle h)
         {
@@ -144,7 +186,6 @@ namespace UnityEngine.Rendering.RenderGraphModule
         Functor
     }
 
-#if UNITY_2020_2_OR_NEWER
     /// <summary>
     /// Subset of the texture desc containing information for fast memory allocation (when platform supports it)
     /// </summary>
@@ -157,7 +198,6 @@ namespace UnityEngine.Rendering.RenderGraphModule
         ///<summary>How much of the render target is to be switched into fast memory (between 0 and 1).</summary>
         public float residencyFraction;
     }
-#endif
 
     /// <summary>
     /// Descriptor used to create texture resources
@@ -225,10 +265,8 @@ namespace UnityEngine.Rendering.RenderGraphModule
 
         ///<summary>Texture name.</summary>
         public string name;
-#if UNITY_2020_2_OR_NEWER
         ///<summary>Descriptor to determine how the texture will be in fast memory on platform that supports it.</summary>
         public FastMemoryDesc fastMemoryDesc;
-#endif
         ///<summary>Determines whether the texture will fallback to a black texture if it is read without ever writing to it.</summary>
         public bool fallBackToBlackTexture;
         ///<summary>
@@ -450,9 +488,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
             hashCode.Append(bindTextureMS);
             hashCode.Append(useDynamicScale);
             hashCode.Append((int) msaaSamples);
-#if UNITY_2020_2_OR_NEWER
             hashCode.Append(fastMemoryDesc.inFastMemory);
-#endif
             hashCode.Append(enableShadingRate);
             return hashCode.value;
         }
@@ -472,7 +508,6 @@ namespace UnityEngine.Rendering.RenderGraphModule
                 TextureSizeMode.Functor => RTHandles.CalculateDimensions(func),
                 _ => throw new ArgumentOutOfRangeException()
             };
-
         }
     }
 
@@ -480,6 +515,8 @@ namespace UnityEngine.Rendering.RenderGraphModule
     class TextureResource : RenderGraphResource<TextureDesc, RTHandle>
     {
         static int m_TextureCreationIndex;
+
+        internal TextureUVOriginSelection textureUVOrigin;
 
         public override string GetName()
         {

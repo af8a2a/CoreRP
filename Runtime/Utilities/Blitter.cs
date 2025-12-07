@@ -91,6 +91,8 @@ namespace UnityEngine.Rendering
             BilinearQuadRed = 20,
             NearestCubeToOctahedralPadding = 21,
             BilinearCubeToOctahedralPadding = 22,
+            NearestQuadPaddingOctahedral = 23,
+            NearestQuadPaddingAlphaBlendOctahedral = 24
         }
 
         enum BlitColorAndDepthPassNames
@@ -514,8 +516,9 @@ namespace UnityEngine.Rendering
         /// </example>
         public static void BlitTexture(CommandBuffer cmd, RTHandle source, Vector4 scaleBias, float mipLevel, bool bilinear)
         {
+            var dimension = (source.rt != null) ? source.rt.dimension : TextureXR.dimension;
             s_PropertyBlock.SetFloat(BlitShaderIDs._BlitMipLevel, mipLevel);
-            BlitTexture(cmd, source, scaleBias, GetBlitMaterial(source.rt.dimension), s_BlitShaderPassIndicesMap[bilinear ? 1 : 0]);
+            BlitTexture(cmd, source, scaleBias, GetBlitMaterial(dimension), s_BlitShaderPassIndicesMap[bilinear ? 1 : 0]);
         }
 
         /// <summary>
@@ -1168,38 +1171,17 @@ namespace UnityEngine.Rendering
         }
 
         /// <summary>
-        /// Adds in a <see cref="CommandBuffer"/> a command to copy a camera related texture identified by
-        /// its <see cref="RTHandle"/> into a destination render target, using a user material, specific shader pass and specific load / store actions.
+        /// Blit a RTHandle to another RTHandle.
+        /// This will properly account for partial usage (in term of resolution) of the texture for the current viewport.
+        /// This overloads allows the user to override the default blit shader
         /// </summary>
-        /// <remarks>
-        /// Camera related textures are created with the <see cref="RenderGraphModule.RenderGraph.CreateTexture"/>
-        /// method using <see cref="RenderGraphModule.TextureDesc.TextureDesc(Vector2,bool,bool)"/> or
-        /// <see cref="RenderGraphModule.TextureDesc.TextureDesc(ScaleFunc,bool,bool)"/> to
-        /// automatically determine their resolution relative to the camera's render target resolution. Compared to the
-        /// various <see cref="BlitTexture"/> and <see cref="BlitTexture2D"/> methods, this function automatically handles the
-        /// <c>scaleBias</c> parameter. The copy operation will always write to the full destination render target rectangle.
-        ///
-        /// The "_BlitTexture" shader property will be set to the <c>source</c> texture and the "_BlitScaleBias" shader
-        /// property will be set to the appropriate value, prior to the draw.
-        /// </remarks>
-        /// <param name="cmd">Command Buffer used for recording the action.</param>
-        /// <param name="source">RTHandle of the source texture to copy from.</param>
-        /// <param name="destination">RTHandle of the destination render target to copy to.</param>
+        /// <param name="cmd">Command Buffer used for rendering.</param>
+        /// <param name="source">Source RTHandle.</param>
+        /// <param name="destination">Destination RTHandle.</param>
         /// <param name="loadAction">Load action to perform on the destination render target prior to the copying.</param>
         /// <param name="storeAction">Store action to perform on the destination render target after the copying.</param>
         /// <param name="material">The material to use for writing to the destination target.</param>
         /// <param name="pass">The index of the pass to use in the material's shader.</param>
-        /// <example>
-        /// <code lang="cs"><![CDATA[
-        /// // Create a texture that has half the width and height of the camera's back buffer.
-        /// TextureDesc texDesc = new TextureDesc(new Vector2(0.5f, 0.5f), false, false);
-        /// RTHandle source = renderGraph.CreateTexture(texDesc);
-        /// // Do a full copy of a source texture to a destination render target using the first pass
-        /// // of a custom material, scaling to the destination render target's full rectangle. Since
-        /// // the destination will be overwritten, mark the load action as "Don't care".
-        /// Blitter.BlitCameraTexture(cmd, source, dest, RenderBufferLoadAction.DontCare, RenderBufferStoreAction.Store, blitMaterial, 0);
-        /// ]]></code>
-        /// </example>
         public static void BlitCameraTexture(CommandBuffer cmd, RTHandle source, RTHandle destination, RenderBufferLoadAction loadAction, RenderBufferStoreAction storeAction, Material material, int pass)
         {
             Vector2 viewportScale = source.useScaling ? new Vector2(source.rtHandleProperties.rtHandleScale.x, source.rtHandleProperties.rtHandleScale.y) : Vector2.one;
@@ -1490,7 +1472,7 @@ namespace UnityEngine.Rendering
             s_PropertyBlock.SetFloat(BlitShaderIDs._BlitMipLevel, mipLevelTex);
             s_PropertyBlock.SetVector(BlitShaderIDs._BlitTextureSize, textureSize);
             s_PropertyBlock.SetInt(BlitShaderIDs._BlitPaddingSize, paddingInPixels);
-            DrawQuad(cmd, GetBlitMaterial(source.dimension), s_BlitShaderPassIndicesMap[8]);
+            DrawQuad(cmd, GetBlitMaterial(source.dimension), s_BlitShaderPassIndicesMap[bilinear ? 8 : 23]);
         }
 
         /// <summary>
@@ -1546,7 +1528,7 @@ namespace UnityEngine.Rendering
             s_PropertyBlock.SetFloat(BlitShaderIDs._BlitMipLevel, mipLevelTex);
             s_PropertyBlock.SetVector(BlitShaderIDs._BlitTextureSize, textureSize);
             s_PropertyBlock.SetInt(BlitShaderIDs._BlitPaddingSize, paddingInPixels);
-            DrawQuad(cmd, GetBlitMaterial(source.dimension), s_BlitShaderPassIndicesMap[13]);
+            DrawQuad(cmd, GetBlitMaterial(source.dimension), s_BlitShaderPassIndicesMap[bilinear ? 13 : 24]);
         }
 
         /// <summary>
@@ -1759,44 +1741,5 @@ namespace UnityEngine.Rendering
 
             DrawQuad(cmd, GetBlitMaterial(source.dimension), s_BlitShaderPassIndicesMap[pass]);
         }
-        
-        
-        
-        
-        /// <summary>
-        /// Draw a full screen triangle with a material.
-        /// This will render into the destination texture with the specified viewport.
-        /// </summary>
-        /// <param name="commandBuffer">Command Buffer used for rendering.</param>
-        /// <param name="viewport">Destination viewport.</param>
-        /// <param name="material">Material used for rendering.</param>
-        /// <param name="destination">Destination RenderTargetIdentifier.</param>
-        /// <param name="properties">Optional Material Property block.</param>
-        /// <param name="shaderPassId">Optional pass index to use.</param>
-        /// <param name="depthSlice">Optional depth slice to render to.</param>
-        /// <param name="cubemapFace">Optional cubemap face to render to.</param>
-        public static void DrawFullScreen(CommandBuffer commandBuffer, Rect viewport, Material material, RenderTargetIdentifier destination, CubemapFace cubemapFace, MaterialPropertyBlock properties = null, int shaderPassId = 0, int depthSlice = -1)
-        {
-            CoreUtils.SetRenderTarget(commandBuffer, destination, ClearFlag.None, 0, cubemapFace, depthSlice);
-            commandBuffer.SetViewport(viewport);
-            commandBuffer.DrawProcedural(Matrix4x4.identity, material, shaderPassId, MeshTopology.Triangles, 3, 1, properties);
-        }
-
-        /// <summary>
-        /// Draw a full screen triangle with a material.
-        /// This will render into the destination texture with the specified viewport.
-        /// </summary>
-        /// <param name="commandBuffer">Command Buffer used for rendering.</param>
-        /// <param name="viewport">Destination viewport.</param>
-        /// <param name="material">Material used for rendering.</param>
-        /// <param name="destination">Destination RenderTargetIdentifier.</param>
-        /// <param name="properties">Optional Material Property block.</param>
-        /// <param name="shaderPassId">Optional pass index to use.</param>
-        /// <param name="depthSlice">Optional depth slice to render to.</param>
-        public static void DrawFullScreen(CommandBuffer commandBuffer, Rect viewport, Material material, RenderTargetIdentifier destination, MaterialPropertyBlock properties = null, int shaderPassId = 0, int depthSlice = -1)
-        {
-            DrawFullScreen(commandBuffer, viewport, material, destination, CubemapFace.Unknown, properties, shaderPassId, depthSlice);
-        }
-
     }
 }

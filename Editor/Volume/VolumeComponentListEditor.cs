@@ -202,7 +202,8 @@ namespace UnityEditor.Rendering
             // Recreate editors for existing settings, if any
             var components = asset.components;
             for (int i = 0; i < components.Count; i++)
-                CreateEditor(components[i], m_ComponentsProperty.GetArrayElementAtIndex(i));
+                if (components[i] != null) //can happens if a component type is removed and opening old serialized data
+                    CreateEditor(components[i], m_ComponentsProperty.GetArrayElementAtIndex(i));
 
             m_CurrentHashCode = asset.GetComponentListHashCode();
 
@@ -470,7 +471,7 @@ namespace UnityEditor.Rendering
             if (VolumeComponentCopyPaste.CanPaste(targetComponent))
                 menu.AddItem(EditorGUIUtility.TrTextContent("Paste Settings"), false, () =>
                 {
-                    VolumeComponentCopyPaste.PasteSettings(targetComponent);
+                    VolumeComponentCopyPaste.PasteSettings(targetComponent, asset);
                     VolumeManager.instance.OnVolumeProfileChanged(asset);
                 });
             else

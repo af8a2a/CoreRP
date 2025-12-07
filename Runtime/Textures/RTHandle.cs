@@ -209,9 +209,9 @@ namespace UnityEngine.Rendering
         public int GetInstanceID()
         {
             if (m_RT != null)
-                return m_RT.GetInstanceID();
+                return m_RT.GetEntityId();
             else if (m_ExternalTexture != null)
-                return m_ExternalTexture.GetInstanceID();
+                return m_ExternalTexture.GetEntityId();
             else
                 return m_NameID.GetHashCode(); // No instance ID so we return the hash code.
         }
@@ -275,7 +275,6 @@ namespace UnityEngine.Rendering
             }
         }
 
-#if UNITY_2020_2_OR_NEWER
         /// <summary>
         /// Switch the render target to fast memory on platform that have it.
         /// </summary>
@@ -317,7 +316,5 @@ namespace UnityEngine.Rendering
         {
             cmd.SwitchOutOfFastMemory(m_RT, copyContents);
         }
-
-#endif
     }
 }

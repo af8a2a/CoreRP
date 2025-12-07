@@ -109,7 +109,7 @@ namespace UnityEngine.Rendering
                 batchResult = new Vector3[k_MaxProbeCountPerBatch];
 
                 var computeBufferTarget = GraphicsBuffer.Target.CopyDestination | GraphicsBuffer.Target.CopySource
-                    | GraphicsBuffer.Target.Structured | GraphicsBuffer.Target.Raw;
+                    | GraphicsBuffer.Target.Structured;
 
                 // Create acceletation structure
                 m_AccelerationStructure = BuildAccelerationStructure(voSettings.collisionMask);
@@ -140,13 +140,16 @@ namespace UnityEngine.Rendering
                     if (!s_TracingContext.TryGetMeshForAccelerationStructure(renderer.component, out var mesh))
                         continue;
 
+                    if (renderer.component is SkinnedMeshRenderer)
+                        continue;
+
                     int subMeshCount = mesh.subMeshCount;
                     var maskAndMatDummy = new uint[subMeshCount];
                     System.Array.Fill(maskAndMatDummy, 0xFFFFFFFF);
                     Span<bool> perSubMeshOpaqueness = stackalloc bool[subMeshCount];
                     perSubMeshOpaqueness.Fill(true);
 
-                    accelStruct.AddInstance(renderer.component.GetInstanceID(), renderer.component, maskAndMatDummy, maskAndMatDummy, perSubMeshOpaqueness, 1);
+                    accelStruct.AddInstance(renderer.component.GetEntityId(), renderer.component, maskAndMatDummy, maskAndMatDummy, perSubMeshOpaqueness, 1);
                 }
 
                 foreach (var terrain in contributors.terrains)
@@ -155,7 +158,7 @@ namespace UnityEngine.Rendering
                     if ((layerMask & mask) == 0)
                         continue;
 
-                    accelStruct.AddInstance(terrain.component.GetInstanceID(), terrain.component, new uint[1] { 0xFFFFFFFF }, new uint[1] { 0xFFFFFFFF }, new bool[1] { true }, 1);
+                    accelStruct.AddInstance(terrain.component.GetEntityId(), terrain.component, new uint[1] { 0xFFFFFFFF }, new uint[1] { 0xFFFFFFFF }, new bool[1] { true }, 1);
                 }
 
                 return accelStruct;
@@ -342,8 +345,19 @@ namespace UnityEngine.Rendering
             // Make sure unloading happens.
             prv.PerformPendingOperations();
 
-            // Write back the assets.
-            WriteBakingCells(m_BakingBatch.cells.ToArray());
+            // Validate baking cells size before writing
+            var bakingCellsArray = m_BakingBatch.cells.ToArray();
+            var chunkSizeInProbes = ProbeBrickPool.GetChunkSizeInProbeCount();
+            var hasVirtualOffsets = m_BakingSet.settings.virtualOffsetSettings.useVirtualOffset;
+            var hasRenderingLayers = m_BakingSet.useRenderingLayers;
+
+            if (ValidateBakingCellsSize(bakingCellsArray, chunkSizeInProbes, hasVirtualOffsets, hasRenderingLayers))
+            {
+                // Write back the assets.
+                WriteBakingCells(bakingCellsArray);
+            }
+
+            m_BakingBatch?.Dispose();
             m_BakingBatch = null;
 
             foreach (var data in prv.perSceneDataList)
@@ -466,7 +480,7 @@ namespace UnityEngine.Rendering
             for (int i = 0; i < matIndices.Length; ++i)
             {
                 if (i < renderer.sharedMaterials.Length && renderer.sharedMaterials[i] != null)
-                    matIndices[i] = (uint)renderer.sharedMaterials[i].GetInstanceID();
+                    matIndices[i] = (uint)renderer.sharedMaterials[i].GetEntityId().GetRawData();
                 else
                     matIndices[i] = 0;
             }

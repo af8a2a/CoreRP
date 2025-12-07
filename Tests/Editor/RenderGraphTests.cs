@@ -6,6 +6,7 @@ using UnityEngine.Rendering.RenderGraphModule;
 using UnityEngine.TestTools;
 using Unity.Collections;
 using UnityEngine.Rendering.RendererUtils;
+using System.Text.RegularExpressions;
 
 #if UNITY_EDITOR
 using UnityEditor;
@@ -42,70 +43,112 @@ namespace UnityEngine.Rendering.Tests
             public BufferHandle[] buffers = new BufferHandle[8];
         }
 
-        // Final output (back buffer) of render graph needs to be explicitly imported in order to know that the chain of dependency should not be culled.
-        [Test]
-        public void WriteToBackBufferNotCulled()
+        TextureDesc SimpleTextureDesc(string name, int w, int h, int samples)
         {
-            using (var builder = m_RenderGraph.AddUnsafePass<RenderGraphTestPassData>("TestPass0", out var passData))
+            TextureDesc result = new TextureDesc(w, h);
+            result.msaaSamples = (MSAASamples)samples;
+            result.format = GraphicsFormat.R8G8B8A8_UNorm;
+            result.name = name;
+            return result;
+        }
+
+        class TestRenderTargets
+        {
+            public TextureHandle backBuffer;
+            public TextureHandle depthBuffer;
+            public TextureHandle[] extraTextures = new TextureHandle[10];
+            public TextureHandle extraDepthBuffer;
+            public TextureHandle extraDepthBufferBottomLeft;
+        };
+
+        TestRenderTargets ImportAndCreateRenderTargets(RenderGraph g, TextureUVOrigin backBufferUVOrigin = TextureUVOrigin.BottomLeft)
+        {
+            TestRenderTargets result = new TestRenderTargets();
+            var backBuffer = BuiltinRenderTextureType.CameraTarget;
+            var backBufferHandle = RTHandles.Alloc(backBuffer, "Backbuffer Color");
+            var depthBuffer = BuiltinRenderTextureType.Depth;
+            var depthBufferHandle = RTHandles.Alloc(depthBuffer, "Backbuffer Depth");
+            var extraDepthBufferHandle = RTHandles.Alloc(depthBuffer, "Extra Depth Buffer");
+            var extraDepthBufferBottomLeftHandle = RTHandles.Alloc(depthBuffer, "Extra Depth Buffer Bottom Left");
+
+            ImportResourceParams importParams = new ImportResourceParams();
+            importParams.textureUVOrigin = backBufferUVOrigin;
+
+            RenderTargetInfo importInfo = new RenderTargetInfo();
+            RenderTargetInfo importInfoDepth = new RenderTargetInfo();
+            importInfo.width = 1024;
+            importInfo.height = 768;
+            importInfo.volumeDepth = 1;
+            importInfo.msaaSamples = 1;
+            importInfo.format = GraphicsFormat.R16G16B16A16_SFloat;
+            result.backBuffer = g.ImportTexture(backBufferHandle, importInfo, importParams);
+
+            importInfoDepth = importInfo;
+            importInfoDepth.format = GraphicsFormat.D32_SFloat_S8_UInt;
+            result.depthBuffer = g.ImportTexture(depthBufferHandle, importInfoDepth, importParams);
+
+            importInfo.format = GraphicsFormat.D24_UNorm;
+            result.extraDepthBuffer = g.ImportTexture(extraDepthBufferHandle, importInfoDepth, importParams);
+
+            importParams.textureUVOrigin = TextureUVOrigin.BottomLeft;
+            result.extraDepthBufferBottomLeft = g.ImportTexture(extraDepthBufferBottomLeftHandle, importInfoDepth, importParams);
+
+            for (int i = 0; i < result.extraTextures.Length; i++)
             {
-                builder.UseTexture(m_RenderGraph.ImportBackbuffer(0), AccessFlags.Write);
-                builder.SetRenderFunc((RenderGraphTestPassData data, UnsafeGraphContext context) => { });
+                result.extraTextures[i] = g.CreateTexture(SimpleTextureDesc("ExtraTexture" + i, 1024, 768, 1));
             }
 
-            m_RenderGraph.CompileRenderGraph(m_RenderGraph.ComputeGraphHash());
+            return result;
+        }
 
-            var compiledPasses = m_RenderGraph.GetCompiledPassInfos();
-            Assert.AreEqual(1, compiledPasses.size);
+        [Test]
+        public void NoWriteToImportedTextureCulled()
+        {
+            var renderTargets = ImportAndCreateRenderTargets(m_RenderGraph);
+
+            using (var builder = m_RenderGraph.AddRasterRenderPass<RenderGraphTestPassData>("TestPass0", out var passData))
+            {
+                builder.UseTexture(renderTargets.backBuffer, AccessFlags.Write);
+                builder.SetRenderFunc((RenderGraphTestPassData data, RasterGraphContext context) => { });
+            }
+
+            var result = m_RenderGraph.CompileNativeRenderGraph(m_RenderGraph.ComputeGraphHash());
+            var compiledPasses = result.contextData.GetPasses();
+
+            Assert.AreEqual(1, compiledPasses.Count);
             Assert.AreEqual(false, compiledPasses[0].culled);
         }
 
         // If no back buffer is ever written to, everything should be culled.
         [Test]
-        public void NoWriteToBackBufferCulled()
+        public void WriteToRenderGraphTextureCulled()
         {
-            using (var builder = m_RenderGraph.AddUnsafePass<RenderGraphTestPassData>("TestPass0", out var passData))
+            using (var builder = m_RenderGraph.AddRasterRenderPass<RenderGraphTestPassData>("TestPass0", out var passData))
             {
                 builder.UseTexture(m_RenderGraph.CreateTexture(new TextureDesc(Vector2.one) { colorFormat = GraphicsFormat.R8G8B8A8_UNorm }), AccessFlags.WriteAll);
-                builder.SetRenderFunc((RenderGraphTestPassData data, UnsafeGraphContext context) => { });
+                builder.SetRenderFunc((RenderGraphTestPassData data, RasterGraphContext context) => { });
             }
 
-            m_RenderGraph.CompileRenderGraph(m_RenderGraph.ComputeGraphHash());
+            var result = m_RenderGraph.CompileNativeRenderGraph(m_RenderGraph.ComputeGraphHash());
+            var compiledPasses = result.contextData.GetPasses();
 
-            var compiledPasses = m_RenderGraph.GetCompiledPassInfos();
-            Assert.AreEqual(1, compiledPasses.size);
+            Assert.AreEqual(1, compiledPasses.Count);
             Assert.AreEqual(true, compiledPasses[0].culled);
-        }
-
-        // Writing to imported resource is considered as a side effect so passes should not be culled.
-        [Test]
-        public void WriteToImportedTextureNotCulled()
-        {
-            using (var builder = m_RenderGraph.AddUnsafePass<RenderGraphTestPassData>("TestPass0", out var passData))
-            {
-                builder.UseTexture(m_RenderGraph.ImportTexture(null), AccessFlags.Write);
-                builder.SetRenderFunc((RenderGraphTestPassData data, UnsafeGraphContext context) => { });
-            }
-
-            m_RenderGraph.CompileRenderGraph(m_RenderGraph.ComputeGraphHash());
-
-            var compiledPasses = m_RenderGraph.GetCompiledPassInfos();
-            Assert.AreEqual(1, compiledPasses.size);
-            Assert.AreEqual(false, compiledPasses[0].culled);
         }
 
         [Test]
         public void WriteToImportedComputeBufferNotCulled()
         {
-            using (var builder = m_RenderGraph.AddUnsafePass<RenderGraphTestPassData>("TestPass0", out var passData))
+            using (var builder = m_RenderGraph.AddRasterRenderPass<RenderGraphTestPassData>("TestPass0", out var passData))
             {
                 builder.UseBuffer(m_RenderGraph.ImportBuffer(null), AccessFlags.Write);
-                builder.SetRenderFunc((RenderGraphTestPassData data, UnsafeGraphContext context) => { });
+                builder.SetRenderFunc((RenderGraphTestPassData data, RasterGraphContext context) => { });
             }
 
-            m_RenderGraph.CompileRenderGraph(m_RenderGraph.ComputeGraphHash());
+            var result = m_RenderGraph.CompileNativeRenderGraph(m_RenderGraph.ComputeGraphHash());
+            var compiledPasses = result.contextData.GetPasses();
 
-            var compiledPasses = m_RenderGraph.GetCompiledPassInfos();
-            Assert.AreEqual(1, compiledPasses.size);
+            Assert.AreEqual(1, compiledPasses.Count);
             Assert.AreEqual(false, compiledPasses[0].culled);
         }
 
@@ -141,14 +184,14 @@ namespace UnityEngine.Rendering.Tests
             using (var builder = m_RenderGraph.AddUnsafePass<RenderGraphTestPassData>("TestPass3", out var passData))
             {
                 builder.UseTexture(texture1, AccessFlags.Read);
-                builder.UseTexture(m_RenderGraph.ImportBackbuffer(0), AccessFlags.Write); // Needed for the passes to not be culled
+                builder.UseBuffer(m_RenderGraph.ImportBuffer(null), AccessFlags.Write);
                 builder.SetRenderFunc((RenderGraphTestPassData data, UnsafeGraphContext context) => { });
             }
 
-            m_RenderGraph.CompileRenderGraph(m_RenderGraph.ComputeGraphHash());
+            var result = m_RenderGraph.CompileNativeRenderGraph(m_RenderGraph.ComputeGraphHash());
+            var compiledPasses = result.contextData.GetPasses();
 
-            var compiledPasses = m_RenderGraph.GetCompiledPassInfos();
-            Assert.AreEqual(4, compiledPasses.size);
+            Assert.AreEqual(4, compiledPasses.Count);
             Assert.AreEqual(false, compiledPasses[0].culled);
             Assert.AreEqual(false, compiledPasses[1].culled);
             Assert.AreEqual(false, compiledPasses[2].culled);
@@ -165,10 +208,10 @@ namespace UnityEngine.Rendering.Tests
                 builder.SetRenderFunc((RenderGraphTestPassData data, UnsafeGraphContext context) => { });
             }
 
-            m_RenderGraph.CompileRenderGraph(m_RenderGraph.ComputeGraphHash());
+            var result = m_RenderGraph.CompileNativeRenderGraph(m_RenderGraph.ComputeGraphHash());
+            var compiledPasses = result.contextData.GetPasses();
 
-            var compiledPasses = m_RenderGraph.GetCompiledPassInfos();
-            Assert.AreEqual(1, compiledPasses.size);
+            Assert.AreEqual(1, compiledPasses.Count);
             Assert.AreEqual(false, compiledPasses[0].culled);
         }
 
@@ -190,10 +233,10 @@ namespace UnityEngine.Rendering.Tests
                 builder.SetRenderFunc((RenderGraphTestPassData data, UnsafeGraphContext context) => { });
             }
 
-            m_RenderGraph.CompileRenderGraph(m_RenderGraph.ComputeGraphHash());
+            var result = m_RenderGraph.CompileNativeRenderGraph(m_RenderGraph.ComputeGraphHash());
+            var compiledPasses = result.contextData.GetPasses();
 
-            var compiledPasses = m_RenderGraph.GetCompiledPassInfos();
-            Assert.AreEqual(2, compiledPasses.size);
+            Assert.AreEqual(2, compiledPasses.Count);
             Assert.AreEqual(false, compiledPasses[0].culled);
             Assert.AreEqual(false, compiledPasses[1].culled);
         }
@@ -225,12 +268,24 @@ namespace UnityEngine.Rendering.Tests
                 builder.SetRenderFunc((RenderGraphTestPassData data, UnsafeGraphContext context) => { });
             }
 
-            m_RenderGraph.CompileRenderGraph(m_RenderGraph.ComputeGraphHash());
+            var result = m_RenderGraph.CompileNativeRenderGraph(m_RenderGraph.ComputeGraphHash());
+            var compiledPasses = result.contextData.GetPasses();
 
-            var compiledPasses = m_RenderGraph.GetCompiledPassInfos();
-            Assert.AreEqual(4, compiledPasses.size);
-            Assert.Contains(texture.handle.index, compiledPasses[0].resourceCreateList[(int)RenderGraphResourceType.Texture]);
-            Assert.Contains(texture.handle.index, compiledPasses[3].resourceReleaseList[(int)RenderGraphResourceType.Texture]);
+            var firstUsedResPass0List = new List<int>();
+            foreach (ref readonly var res in compiledPasses[0].FirstUsedResources(result.contextData))
+            {
+                firstUsedResPass0List.Add(res.index);
+            }
+
+            var lastUsedResPass3List = new List<int>();
+            foreach (ref readonly var res in compiledPasses[3].LastUsedResources(result.contextData))
+            {
+                lastUsedResPass3List.Add(res.index);
+            }
+
+            Assert.AreEqual(4, compiledPasses.Count);
+            Assert.Contains(texture.handle.index, firstUsedResPass0List);
+            Assert.Contains(texture.handle.index, lastUsedResPass3List);
         }
 
         [Test]
@@ -252,7 +307,7 @@ namespace UnityEngine.Rendering.Tests
                     builder.SetRenderFunc((RenderGraphTestPassData data, UnsafeGraphContext context) => { });
                 }
 
-                m_RenderGraph.CompileRenderGraph(m_RenderGraph.ComputeGraphHash());
+                m_RenderGraph.CompileNativeRenderGraph(m_RenderGraph.ComputeGraphHash());
             });
         }
 
@@ -267,12 +322,24 @@ namespace UnityEngine.Rendering.Tests
                 builder.SetRenderFunc((RenderGraphTestPassData data, UnsafeGraphContext context) => { });
             }
 
-            m_RenderGraph.CompileRenderGraph(m_RenderGraph.ComputeGraphHash());
+            var result = m_RenderGraph.CompileNativeRenderGraph(m_RenderGraph.ComputeGraphHash());
+            var compiledPasses = result.contextData.GetPasses();
 
-            var compiledPasses = m_RenderGraph.GetCompiledPassInfos();
-            Assert.AreEqual(1, compiledPasses.size);
-            Assert.Contains(texture.handle.index, compiledPasses[0].resourceCreateList[(int)RenderGraphResourceType.Texture]);
-            Assert.Contains(texture.handle.index, compiledPasses[0].resourceReleaseList[(int)RenderGraphResourceType.Texture]);
+            var firstUsedResList = new List<int>();
+            foreach (ref readonly var res in compiledPasses[0].FirstUsedResources(result.contextData))
+            {
+                firstUsedResList.Add(res.index);
+            }
+
+            var lastUsedResList = new List<int>();
+            foreach (ref readonly var res in compiledPasses[0].LastUsedResources(result.contextData))
+            {
+                lastUsedResList.Add(res.index);
+            }
+
+            Assert.AreEqual(1, compiledPasses.Count);
+            Assert.Contains(texture.handle.index, firstUsedResList);
+            Assert.Contains(texture.handle.index, lastUsedResList);
         }
 
         // Texture that should be released during an async pass should have their release delayed until the first pass that syncs with the compute pipe.
@@ -344,12 +411,126 @@ namespace UnityEngine.Rendering.Tests
                 builder.SetRenderFunc((RenderGraphTestPassData data, UnsafeGraphContext context) => { });
             }
 
-            m_RenderGraph.CompileRenderGraph(m_RenderGraph.ComputeGraphHash());
+            // Final pass to ensure we don't simply allocate resource used by async queue until the end of the frame
+            using (var builder = m_RenderGraph.AddUnsafePass<RenderGraphTestPassData>("TestPass6", out var passData))
+            {
+                builder.UseTexture(texture3, AccessFlags.Read);
+                builder.UseTexture(m_RenderGraph.ImportBackbuffer(0), AccessFlags.Write); // Needed for the passes to not be culled
+                builder.EnableAsyncCompute(false);
+                builder.SetRenderFunc((RenderGraphTestPassData data, UnsafeGraphContext context) => { });
+            }
 
-            var compiledPasses = m_RenderGraph.GetCompiledPassInfos();
-            Assert.AreEqual(6, compiledPasses.size);
-            Assert.Contains(texture0.handle.index, compiledPasses[4].resourceReleaseList[(int)RenderGraphResourceType.Texture]);
-            Assert.Contains(texture2.handle.index, compiledPasses[4].resourceReleaseList[(int)RenderGraphResourceType.Texture]);
+            var result = m_RenderGraph.CompileNativeRenderGraph(m_RenderGraph.ComputeGraphHash());
+            var compiledPasses = result.contextData.GetPasses();
+
+            var releasedResourcePass4List = new List<int>();
+            foreach (ref readonly var releasedRes in compiledPasses[4].LastUsedResources(result.contextData))
+            {
+                releasedResourcePass4List.Add(releasedRes.index);
+            }
+
+            Assert.AreEqual(7, compiledPasses.Count);
+            Assert.AreEqual(5, compiledPasses[2].awaitingMyGraphicsFencePassId);
+            Assert.AreEqual(2, compiledPasses[5].waitOnGraphicsFencePassId);
+
+            Assert.Contains(texture0.handle.index, releasedResourcePass4List);
+            Assert.Contains(texture2.handle.index, releasedResourcePass4List);
+        }
+
+        [Test]
+        public void AsyncPassReleaseTextureOnGraphicsPipeAtLastNonCulledPass_WhenNoFence()
+        {
+            TextureHandle texture0 =
+                m_RenderGraph.CreateTexture(
+                    new TextureDesc(Vector2.one) { colorFormat = GraphicsFormat.R8G8B8A8_UNorm });
+            TextureHandle texture1 =
+                m_RenderGraph.CreateTexture(
+                    new TextureDesc(Vector2.one) { colorFormat = GraphicsFormat.R8G8B8A8_UNorm });
+            TextureHandle texture2; // transient texture
+            TextureHandle texture3 =
+                m_RenderGraph.CreateTexture(
+                    new TextureDesc(Vector2.one) { colorFormat = GraphicsFormat.R8G8B8A8_UNorm });
+
+            // First pass creates and writes two textures.
+            using (var builder = m_RenderGraph.AddUnsafePass<RenderGraphTestPassData>("Async_TestPass0", out var passData))
+            {
+                builder.UseTexture(texture0, AccessFlags.Write);
+                builder.UseTexture(texture1, AccessFlags.Write);
+                builder.EnableAsyncCompute(true);
+                builder.AllowPassCulling(false);
+                builder.SetRenderFunc((RenderGraphTestPassData data, UnsafeGraphContext context) => { });
+            }
+
+            // Second pass creates a transient texture => Create/Release should happen in this pass but we want to delay the release until the first graphics pipe pass that sync with async queue.
+            using (var builder = m_RenderGraph.AddUnsafePass<RenderGraphTestPassData>("Async_TestPass1", out var passData))
+            {
+                texture2 = builder.CreateTransientTexture(new TextureDesc(Vector2.one) { colorFormat = GraphicsFormat.R8G8B8A8_UNorm });
+                builder.UseTexture(texture0, AccessFlags.Write);
+                builder.EnableAsyncCompute(true);
+                builder.AllowPassCulling(false);
+                builder.SetRenderFunc((RenderGraphTestPassData data, UnsafeGraphContext context) => { });
+            }
+
+            // This pass is the last to read texture0 => Release should happen in this pass but we want to delay the release until the first graphics pipe pass that sync with async queue.
+            using (var builder = m_RenderGraph.AddUnsafePass<RenderGraphTestPassData>("Async_TestPass2", out var passData))
+            {
+                builder.UseTexture(texture0, AccessFlags.Read);
+                builder.UseTexture(texture1, AccessFlags.Write);
+                builder.EnableAsyncCompute(true);
+                builder.AllowPassCulling(false);
+                builder.SetRenderFunc((RenderGraphTestPassData data, UnsafeGraphContext context) => { });
+            }
+
+            // Just here to add "padding" to the number of passes to ensure resources are not released right at the first sync pass.
+            using (var builder = m_RenderGraph.AddUnsafePass<RenderGraphTestPassData>("TestPass3", out var passData))
+            {
+                builder.UseTexture(texture3, AccessFlags.Write);
+                builder.EnableAsyncCompute(false);
+                builder.AllowPassCulling(false);
+                builder.SetRenderFunc((RenderGraphTestPassData data, UnsafeGraphContext context) => { });
+            }
+
+            // Final non culled pass where we should release textures as there is no sync with async queue
+            using (var builder = m_RenderGraph.AddUnsafePass<RenderGraphTestPassData>("TestPass4", out var passData))
+            {
+                builder.UseTexture(texture3, AccessFlags.Read);
+                builder.EnableAsyncCompute(false);
+                builder.AllowPassCulling(false);
+                builder.SetRenderFunc((RenderGraphTestPassData data, UnsafeGraphContext context) => { });
+            }
+
+            // Final pass that will be culled, so we need to release before to avoid leaking
+            using (var builder = m_RenderGraph.AddUnsafePass<RenderGraphTestPassData>("TestPass5", out var passData))
+            {
+                builder.UseTexture(texture3, AccessFlags.Read);
+                builder.EnableAsyncCompute(false);
+                builder.AllowPassCulling(true);
+                builder.SetRenderFunc((RenderGraphTestPassData data, UnsafeGraphContext context) => { });
+            }
+
+            var result = m_RenderGraph.CompileNativeRenderGraph(m_RenderGraph.ComputeGraphHash());
+            var compiledPasses = result.contextData.GetPasses();
+
+            var releasedResourcePass4List = new List<int>();
+            foreach (ref readonly var releasedRes in compiledPasses[4].LastUsedResources(result.contextData))
+            {
+                releasedResourcePass4List.Add(releasedRes.index);
+            }
+
+            Assert.AreEqual(6, compiledPasses.Count);
+            Assert.AreEqual(true, compiledPasses[5].culled);
+
+            // No sync between the two queues (for some probably weird/incorrect reasons but still worth considering)
+            Assert.AreEqual(-1, compiledPasses[0].awaitingMyGraphicsFencePassId);
+            Assert.AreEqual(-1, compiledPasses[1].awaitingMyGraphicsFencePassId);
+            Assert.AreEqual(-1, compiledPasses[2].waitOnGraphicsFencePassId);
+            Assert.AreEqual(-1, compiledPasses[3].waitOnGraphicsFencePassId);
+            Assert.AreEqual(-1, compiledPasses[4].waitOnGraphicsFencePassId);
+
+            // As there is no fence, all resources used by the async queue should be released by the last pass
+            Assert.Contains(texture0.handle.index, releasedResourcePass4List);
+            Assert.Contains(texture1.handle.index, releasedResourcePass4List);
+            Assert.Contains(texture2.handle.index, releasedResourcePass4List);
         }
 
         [Test]
@@ -378,10 +559,10 @@ namespace UnityEngine.Rendering.Tests
                 builder.SetRenderFunc((RenderGraphTestPassData data, UnsafeGraphContext context) => { });
             }
 
-            m_RenderGraph.CompileRenderGraph(m_RenderGraph.ComputeGraphHash());
+            var result = m_RenderGraph.CompileNativeRenderGraph(m_RenderGraph.ComputeGraphHash());
+            var compiledPasses = result.contextData.GetPasses();
 
-            var compiledPasses = m_RenderGraph.GetCompiledPassInfos();
-            Assert.AreEqual(3, compiledPasses.size);
+            Assert.AreEqual(3, compiledPasses.Count);
             Assert.AreEqual(false, compiledPasses[1].culled);
         }
 
@@ -409,12 +590,12 @@ namespace UnityEngine.Rendering.Tests
                 builder.SetRenderFunc((RenderGraphTestPassData data, UnsafeGraphContext context) => { });
             }
 
-            m_RenderGraph.CompileRenderGraph(m_RenderGraph.ComputeGraphHash());
+            var result = m_RenderGraph.CompileNativeRenderGraph(m_RenderGraph.ComputeGraphHash());
+            var compiledPasses = result.contextData.GetPasses();
 
-            var compiledPasses = m_RenderGraph.GetCompiledPassInfos();
-            Assert.AreEqual(3, compiledPasses.size);
-            Assert.AreEqual(0, compiledPasses[1].syncToPassIndex);
-            Assert.AreEqual(1, compiledPasses[2].syncToPassIndex);
+            Assert.AreEqual(3, compiledPasses.Count);
+            Assert.AreEqual(0, compiledPasses[1].waitOnGraphicsFencePassId);
+            Assert.AreEqual(1, compiledPasses[2].waitOnGraphicsFencePassId);
         }
 
         [Test]
@@ -444,12 +625,12 @@ namespace UnityEngine.Rendering.Tests
                 builder.SetRenderFunc((RenderGraphTestPassData data, UnsafeGraphContext context) => { });
             }
 
-            m_RenderGraph.CompileRenderGraph(m_RenderGraph.ComputeGraphHash());
+            var result = m_RenderGraph.CompileNativeRenderGraph(m_RenderGraph.ComputeGraphHash());
+            var compiledPasses = result.contextData.GetPasses();
 
-            var compiledPasses = m_RenderGraph.GetCompiledPassInfos();
-            Assert.AreEqual(3, compiledPasses.size);
-            Assert.AreEqual(0, compiledPasses[1].syncToPassIndex);
-            Assert.AreEqual(1, compiledPasses[2].syncToPassIndex);
+            Assert.AreEqual(3, compiledPasses.Count);
+            Assert.AreEqual(0, compiledPasses[1].waitOnGraphicsFencePassId);
+            Assert.AreEqual(1, compiledPasses[2].waitOnGraphicsFencePassId);
         }
 
         [Test]
@@ -479,11 +660,11 @@ namespace UnityEngine.Rendering.Tests
                 builder.SetRenderFunc((RenderGraphTestPassData data, UnsafeGraphContext context) => { });
             }
 
-            m_RenderGraph.CompileRenderGraph(m_RenderGraph.ComputeGraphHash());
+            var result = m_RenderGraph.CompileNativeRenderGraph(m_RenderGraph.ComputeGraphHash());
+            var compiledPasses = result.contextData.GetPasses();
 
-            var compiledPasses = m_RenderGraph.GetCompiledPassInfos();
-            Assert.AreEqual(3, compiledPasses.size);
-            Assert.AreEqual(0, compiledPasses[1].syncToPassIndex);
+            Assert.AreEqual(3, compiledPasses.Count);
+            Assert.AreEqual(0, compiledPasses[1].waitOnGraphicsFencePassId);
         }
 
         [Test]
@@ -505,11 +686,11 @@ namespace UnityEngine.Rendering.Tests
                 builder.SetRenderFunc((RenderGraphTestPassData data, UnsafeGraphContext context) => { });
             }
 
-            m_RenderGraph.CompileRenderGraph(m_RenderGraph.ComputeGraphHash());
+            var result = m_RenderGraph.CompileNativeRenderGraph(m_RenderGraph.ComputeGraphHash());
+            var compiledPasses = result.contextData.GetPasses();
 
-            var compiledPasses = m_RenderGraph.GetCompiledPassInfos();
-            Assert.AreEqual(2, compiledPasses.size);
-            Assert.AreEqual(0, compiledPasses[1].syncToPassIndex);
+            Assert.AreEqual(2, compiledPasses.Count);
+            Assert.AreEqual(0, compiledPasses[1].waitOnGraphicsFencePassId);
         }
 
         [Test]
@@ -948,7 +1129,7 @@ namespace UnityEngine.Rendering.Tests
         {
             const int kWidth = 4;
             const int kHeight = 4;
-          
+
             TextureHandle texture0 = m_RenderGraph.CreateTexture(new TextureDesc(kWidth, kHeight) { colorFormat = GraphicsFormat.R8G8B8A8_UNorm });
             TextureHandle depthTexture = m_RenderGraph.CreateTexture(new TextureDesc(kWidth, kHeight) { colorFormat = GraphicsFormat.D16_UNorm });
             // no depth with Tile Properties
@@ -987,7 +1168,7 @@ namespace UnityEngine.Rendering.Tests
 
             TextureHandle texture0 = m_RenderGraph.CreateTexture(new TextureDesc(kWidth, kHeight) { colorFormat = GraphicsFormat.R8G8B8A8_UNorm });
             TextureHandle depthTexture = m_RenderGraph.CreateTexture(new TextureDesc(kWidth, kHeight) { colorFormat = GraphicsFormat.D16_UNorm });
-            
+
             // no Tile Properties
             using (var builder = m_RenderGraph.AddRasterRenderPass<RenderGraphTestPassData>("TestPass0", out var passData))
             {
@@ -1006,7 +1187,7 @@ namespace UnityEngine.Rendering.Tests
             }
 
             var result = m_RenderGraph.CompileNativeRenderGraph(m_RenderGraph.ComputeGraphHash());
-            var passes = result.contextData.GetNativePasses();            
+            var passes = result.contextData.GetNativePasses();
             // TilePrperties flag should be added to subpass 0 and not interfere with merging.
             Assert.AreEqual(1, passes.Count); // 1 native Pass
             Assert.True(result.contextData.nativeSubPassData[0].flags.HasFlag(SubPassFlags.TileProperties));
@@ -1070,6 +1251,165 @@ namespace UnityEngine.Rendering.Tests
                 LogAssert.Expect(LogType.Error, "Render Graph Execution error");
                 LogAssert.Expect(LogType.Exception, "Exception: ExtendedFeatureFlags.TileProperties can only be set once per render graph (render graph RenderGraph, pass TestPass1), previously set at (pass TestPass0).");
                 var result = m_RenderGraph.CompileNativeRenderGraph(m_RenderGraph.ComputeGraphHash());
+            };
+            m_Camera.Render();
+        }
+
+        [Test]
+        public void RenderGraphMultisampledShaderResolvePassWorks()
+        {
+            m_RenderGraphTestPipeline.recordRenderGraphBody = (context, camera, cmd) =>
+            {
+                if (!SystemInfo.supportsMultisampledShaderResolve)
+                {
+                    return; // Skip the test if the platform does not support multisampled shader resolve
+                }
+
+                var colorTexDesc = new TextureDesc(Vector2.one, false, false)
+                {
+                    width = 4,
+                    height = 4,
+                    format = GraphicsFormat.R8G8B8A8_UNorm,
+                    clearBuffer = true,
+                    clearColor = Color.red,
+                    msaaSamples = MSAASamples.MSAA4x,
+                    memoryless = RenderTextureMemoryless.None, // Initially set memoryless to false, RG will modify it
+                    name = "MSAA Color Texture"
+                };
+
+                var createdMSAAx4Color = m_RenderGraph.CreateTexture(colorTexDesc);
+
+                colorTexDesc.msaaSamples = MSAASamples.None;
+                var createdMSAAx1Color = m_RenderGraph.CreateTexture(colorTexDesc);
+
+                // MSAA4x pass
+                using (var builder = m_RenderGraph.AddRasterRenderPass<RenderGraphTestPassData>("TestPass0", out var passData))
+                {
+                    builder.SetRenderAttachment(createdMSAAx4Color, 0, AccessFlags.Write);
+                    builder.AllowPassCulling(false);
+                    builder.SetRenderFunc((RenderGraphTestPassData data, RasterGraphContext context) => { });
+                }
+
+                // MSAA1x pass with shader resolve enabled
+                using (var builder = m_RenderGraph.AddRasterRenderPass<RenderGraphTestPassData>("TestPass1", out var passData))
+                {
+                    builder.SetRenderAttachment(createdMSAAx1Color, 0, AccessFlags.Write);
+                    builder.SetExtendedFeatureFlags(ExtendedFeatureFlags.MultisampledShaderResolve);
+                    builder.AllowPassCulling(false);
+                    builder.SetRenderFunc((RenderGraphTestPassData data, RasterGraphContext context) => { });
+                }
+                var result = m_RenderGraph.CompileNativeRenderGraph(m_RenderGraph.ComputeGraphHash());
+                var passes = result.contextData.GetNativePasses();
+
+                Assert.AreEqual(1, passes.Count);
+            };
+            m_Camera.Render();
+        }
+
+        [Test]
+        public void RenderGraphMultisampledShaderResolvePassWorksForMSAATarget()
+        {
+            m_RenderGraphTestPipeline.recordRenderGraphBody = (context, camera, cmd) =>
+            {
+                var colorTexDesc = new TextureDesc(Vector2.one, false, false)
+                {
+                    width = 4,
+                    height = 4,
+                    format = GraphicsFormat.R8G8B8A8_UNorm,
+                    clearBuffer = true,
+                    clearColor = Color.red,
+                    msaaSamples = MSAASamples.MSAA4x,
+                    memoryless = RenderTextureMemoryless.None, // Initially set memoryless to false, RG will modify it
+                    name = "MSAA Color Texture"
+                };
+
+                var createdMSAAx4Color0 = m_RenderGraph.CreateTexture(colorTexDesc);
+                var createdMSAAx4Color1 = m_RenderGraph.CreateTexture(colorTexDesc);
+
+                // MSAA4x pass
+                using (var builder = m_RenderGraph.AddRasterRenderPass<RenderGraphTestPassData>("TestPass0", out var passData))
+                {
+                    builder.SetRenderAttachment(createdMSAAx4Color0, 0, AccessFlags.Write);
+                    builder.AllowPassCulling(false);
+                    builder.SetRenderFunc((RenderGraphTestPassData data, RasterGraphContext context) => { });
+                }
+
+                // MSAA4x pass with shader resolve enabled
+                using (var builder = m_RenderGraph.AddRasterRenderPass<RenderGraphTestPassData>("TestPass1", out var passData))
+                {
+                    builder.SetRenderAttachment(createdMSAAx4Color1, 0, AccessFlags.Write);
+                    builder.SetExtendedFeatureFlags(ExtendedFeatureFlags.MultisampledShaderResolve);
+                    builder.AllowPassCulling(false);
+                    builder.SetRenderFunc((RenderGraphTestPassData data, RasterGraphContext context) => { });
+                }
+                var result = m_RenderGraph.CompileNativeRenderGraph(m_RenderGraph.ComputeGraphHash());
+                var passes = result.contextData.GetNativePasses();
+
+                Assert.AreEqual(1, passes.Count);
+            };
+            m_Camera.Render();
+        }
+
+        [Test]
+        public void RenderGraphMultisampledShaderResolvePassMustBeTheLastSubpass()
+        {
+            m_RenderGraphTestPipeline.recordRenderGraphBody = (context, camera, cmd) =>
+            {
+                const int kWidth = 4;
+                const int kHeight = 4;
+
+                TextureHandle dummyTexture0 = m_RenderGraph.CreateTexture(new TextureDesc(kWidth, kHeight) { colorFormat = GraphicsFormat.R8G8B8A8_UNorm });
+
+                // Shader resolve enabled pass
+                using (var builder = m_RenderGraph.AddRasterRenderPass<RenderGraphTestPassData>("TestPass0", out var passData))
+                {
+                    builder.SetRenderAttachment(dummyTexture0, 0, AccessFlags.Write);
+                    builder.SetExtendedFeatureFlags(ExtendedFeatureFlags.MultisampledShaderResolve);
+                    builder.AllowPassCulling(false);
+                    builder.SetRenderFunc((RenderGraphTestPassData data, RasterGraphContext context) => { });
+                }
+
+                // Second pass that should not be merged.
+                using (var builder = m_RenderGraph.AddRasterRenderPass<RenderGraphTestPassData>("TestPass1", out var passData))
+                {
+                    builder.SetRenderAttachment(dummyTexture0, 0, AccessFlags.Write);
+                    builder.AllowPassCulling(false);
+                    builder.SetRenderFunc((RenderGraphTestPassData data, RasterGraphContext context) => { });
+                }
+                var result = m_RenderGraph.CompileNativeRenderGraph(m_RenderGraph.ComputeGraphHash());
+                var passes = result.contextData.GetNativePasses();
+
+                // Can't merge any pass into shader resolve enabled pass
+                Assert.AreEqual(2, passes.Count); // 2 native passes
+            };
+            m_Camera.Render();
+        }
+
+        [Test]
+        public void RenderGraphMultisampledShaderResolvePassMustHaveOneColorAttachment()
+        {
+            const string kErrorMessage = "Low level rendergraph error: last subpass with shader resolve must have one color attachment.";
+            const int kWidth = 4;
+            const int kHeight = 4;
+
+            m_RenderGraphTestPipeline.recordRenderGraphBody = (context, camera, cmd) =>
+            {
+                TextureHandle dummyTexture0 = m_RenderGraph.CreateTexture(new TextureDesc(kWidth, kHeight) { colorFormat = GraphicsFormat.R8G8B8A8_UNorm });
+                TextureHandle dummyTexture1 = m_RenderGraph.CreateTexture(new TextureDesc(kWidth, kHeight) { colorFormat = GraphicsFormat.R8G8B8A8_UNorm });
+
+                // Shader resolve enabled pass
+                using (var builder = m_RenderGraph.AddRasterRenderPass<RenderGraphTestPassData>("TestPass0", out var passData))
+                {
+                    builder.SetRenderAttachment(dummyTexture0, 0, AccessFlags.Write);
+                    builder.SetRenderAttachment(dummyTexture1, 1, AccessFlags.Write);
+                    builder.SetExtendedFeatureFlags(ExtendedFeatureFlags.MultisampledShaderResolve);
+                    builder.AllowPassCulling(false);
+                    builder.SetRenderFunc((RenderGraphTestPassData data, RasterGraphContext context) => { });
+                }
+
+                var result = m_RenderGraph.CompileNativeRenderGraph(m_RenderGraph.ComputeGraphHash());
+                LogAssert.Expect(LogType.Error, "Render Graph Execution error");
+                LogAssert.Expect(LogType.Exception, $"Exception: {kErrorMessage}");
             };
             m_Camera.Render();
         }
@@ -1869,8 +2209,14 @@ namespace UnityEngine.Rendering.Tests
                                 transientColorRTHandle = (RTHandle)data.transientColorOutputHandle;
                             });
 
+                            if (!SystemInfo.supportsMemorylessTextures)
+                            {
+                                Assert.IsTrue(createdDepthRTHandle.rt.memorylessMode == RenderTextureMemoryless.None);
+                                Assert.IsTrue(createdColorRTHandle.rt.memorylessMode == RenderTextureMemoryless.None);
+                                Assert.IsTrue(transientColorRTHandle.rt.memorylessMode == RenderTextureMemoryless.None);
+                            }
                             // And let's make sure that the RTHandles are memoryless, i.e. no memory is allocated in system memory
-                            if (msaaSamples != MSAASamples.None)
+                            else if (msaaSamples != MSAASamples.None)
                             {
                                 Assert.IsTrue(createdDepthRTHandle.rt.memorylessMode == (RenderTextureMemoryless.Depth | RenderTextureMemoryless.MSAA));
                                 Assert.IsTrue(createdColorRTHandle.rt.memorylessMode == (RenderTextureMemoryless.Color | RenderTextureMemoryless.MSAA));
@@ -1944,6 +2290,168 @@ namespace UnityEngine.Rendering.Tests
             Assert.IsTrue(resIn.GetInstanceID() == resOut.GetInstanceID());
 
             texturePool.Cleanup();
+        }
+
+        class UVOriginPassData
+        {
+            public TextureUVOrigin backBufferUVOrigin;
+            public TextureHandle renderAttachment;
+            public TextureHandle inputAttachment;
+        }
+
+        // Test the case we want to work, attachment reads connected to the backbuffer inherit the backbuffer uv origin.
+        [Test]
+        public void TextureUVOrigin_CheckBackbufferUVOriginInherited()
+        {
+            // We don't send the list of graphics commands to execute to avoid mistmatch attachment size errors in the native render pass layer due to the backbuffer usage
+            m_RenderGraphTestPipeline.invalidContextForTesting = true;
+            m_RenderGraphTestPipeline.renderTextureUVOriginStrategy = RenderTextureUVOriginStrategy.PropagateAttachmentOrientation; // Switch to the mode we want to test.
+            m_RenderGraphTestPipeline.recordRenderGraphBody = (context, camera, cmd) =>
+            {
+                // On !SystemInfo.graphicsUVStartsAtTop APIs everything simplifies as that matches Unity's texture reads so we can't test a TopLeft system there.
+                var backBufferUVOrigin = SystemInfo.graphicsUVStartsAtTop ? TextureUVOrigin.TopLeft : TextureUVOrigin.BottomLeft;
+                var renderTargets = ImportAndCreateRenderTargets(m_RenderGraph, backBufferUVOrigin);
+
+                // Render something to 0
+                using (var builder = m_RenderGraph.AddRasterRenderPass<UVOriginPassData>("TestPass0", out var passData))
+                {
+                    passData.backBufferUVOrigin = backBufferUVOrigin;
+                    passData.renderAttachment = renderTargets.extraTextures[0];
+
+                    builder.SetRenderAttachmentDepth(renderTargets.depthBuffer, AccessFlags.Write);
+                    builder.SetRenderAttachment(renderTargets.extraTextures[0], 0, AccessFlags.Write);
+                    builder.SetRenderFunc(static (UVOriginPassData data, RasterGraphContext context) =>
+                    {
+                        // Check that the backbuffer UV origin is inherited by attachments.
+                        Assert.AreEqual(context.GetTextureUVOrigin(data.renderAttachment), data.backBufferUVOrigin);
+                    });
+                }
+
+                // Render to 1 reading from 0 as an attachment
+                using (var builder = m_RenderGraph.AddRasterRenderPass<UVOriginPassData>("TestPass1", out var passData))
+                {
+                    passData.backBufferUVOrigin = backBufferUVOrigin;
+                    passData.inputAttachment = renderTargets.extraTextures[0];
+                    passData.renderAttachment = renderTargets.extraTextures[1];
+
+                    //builder.SetRenderAttachmentDepth(buffers.depthBuffer, AccessFlags.Write);
+                    builder.SetRenderAttachment(renderTargets.extraTextures[1], 0, AccessFlags.Write);
+                    builder.SetInputAttachment(renderTargets.extraTextures[0], 0, AccessFlags.Read);
+                    builder.SetRenderFunc(static (UVOriginPassData data, RasterGraphContext context) =>
+                    {
+                        // Check that the backbuffer UV origin is inherited by attachments.
+                        Assert.AreEqual(context.GetTextureUVOrigin(data.renderAttachment), data.backBufferUVOrigin);
+                        Assert.AreEqual(context.GetTextureUVOrigin(data.inputAttachment), data.backBufferUVOrigin);
+                    });
+                }
+
+                // Render to final buffer reading from 1 as an attachment
+                using (var builder = m_RenderGraph.AddRasterRenderPass<UVOriginPassData>("TestPass2", out var passData))
+                {
+                    passData.backBufferUVOrigin = backBufferUVOrigin;
+                    passData.inputAttachment = renderTargets.extraTextures[1];
+                    passData.renderAttachment = renderTargets.backBuffer;
+
+                    //builder.SetRenderAttachmentDepth(buffers.depthBuffer, AccessFlags.Write);
+                    builder.SetRenderAttachment(renderTargets.backBuffer, 0, AccessFlags.Write);
+                    builder.SetInputAttachment(renderTargets.extraTextures[1], 0, AccessFlags.Read);
+                    builder.SetRenderFunc(static (UVOriginPassData data, RasterGraphContext context) =>
+                    {
+                        // Check that the backbuffer UV origin is inherited by attachments.
+                        Assert.AreEqual(context.GetTextureUVOrigin(data.renderAttachment), data.backBufferUVOrigin);
+                        Assert.AreEqual(context.GetTextureUVOrigin(data.inputAttachment), data.backBufferUVOrigin);
+                    });
+                }
+
+                var result = m_RenderGraph.CompileNativeRenderGraph(m_RenderGraph.ComputeGraphHash());
+                var passes = result.contextData.GetNativePasses();
+                Assert.AreEqual(1, passes.Count);
+                Assert.AreEqual(4, passes[0].attachments.size);
+                Assert.AreEqual(3, passes[0].numGraphPasses);
+                Assert.AreEqual(3, passes[0].numNativeSubPasses);
+            };
+
+            m_Camera.Render();
+
+            m_RenderGraph.Cleanup();
+        }
+
+        // Test that texture reads break the inherited UV origin from the backbuffer.
+        [Test]
+        public void TextureUVOrigin_CheckTextureReadBreaksBackbufferUVOriginInherited()
+        {
+            // On OpenGL based APIs (!SystemInfo.graphicsUVStartsAtTop) we can't perform this test as we always assume the origin is BottomLeft which is compatible with texture reads.
+            if (!SystemInfo.graphicsUVStartsAtTop) return;
+
+            // We don't send the list of graphics commands to execute to avoid mistmatch attachment size errors in the native render pass layer due to the backbuffer usage
+            m_RenderGraphTestPipeline.invalidContextForTesting = true;
+            m_RenderGraphTestPipeline.renderTextureUVOriginStrategy = RenderTextureUVOriginStrategy.PropagateAttachmentOrientation; // Switch to the mode we want to test.
+            m_RenderGraphTestPipeline.recordRenderGraphBody = (context, camera, cmd) =>
+            {
+                var backBufferUVOrigin = TextureUVOrigin.TopLeft;
+                var renderTargets = ImportAndCreateRenderTargets(m_RenderGraph, backBufferUVOrigin);
+
+                // Render something to 0
+                using (var builder = m_RenderGraph.AddRasterRenderPass<UVOriginPassData>("TestPass0", out var passData))
+                {
+                    passData.renderAttachment = renderTargets.extraTextures[0];
+
+                    builder.SetRenderAttachmentDepth(renderTargets.extraDepthBufferBottomLeft, AccessFlags.Write);
+                    builder.SetRenderAttachment(renderTargets.extraTextures[0], 0, AccessFlags.Write);
+                    builder.SetRenderFunc(static (UVOriginPassData data, RasterGraphContext context) =>
+                    {
+                        // 0 is read in the next pass as a unity texture so needs to be bottom left.
+                        Assert.AreEqual(TextureUVOrigin.BottomLeft, context.GetTextureUVOrigin(data.renderAttachment));
+                    });
+                }
+
+                // Render to 1 reading from 0 as a texture
+                using (var builder = m_RenderGraph.AddRasterRenderPass<UVOriginPassData>("TestPass1", out var passData))
+                {
+                    passData.backBufferUVOrigin = backBufferUVOrigin;
+                    passData.renderAttachment = renderTargets.extraTextures[1];
+
+                    builder.SetRenderAttachment(renderTargets.extraTextures[1], 0, AccessFlags.Write);
+                    builder.UseTexture(renderTargets.extraTextures[0], AccessFlags.Read);
+                    builder.SetRenderFunc(static (UVOriginPassData data, RasterGraphContext context) =>
+                    {
+                        // Check that the backbuffer UV origin is inherited by attachment 1.
+                        // 1 is read via attachments so could inherit the backbuffer attachment but will probably generate an exception for mixed UV origin, but only on platforms (not in the editor) where we are top left origin.
+                        Assert.AreEqual(data.backBufferUVOrigin, context.GetTextureUVOrigin(data.renderAttachment));
+                    });
+                }
+
+                // Render to final buffer reading from 1 as an attachment
+                using (var builder = m_RenderGraph.AddRasterRenderPass<UVOriginPassData>("TestPass2", out var passData))
+                {
+                    passData.backBufferUVOrigin = backBufferUVOrigin;
+                    passData.renderAttachment = renderTargets.backBuffer;
+
+                    builder.SetRenderAttachment(renderTargets.backBuffer, 0, AccessFlags.Write);
+                    builder.SetInputAttachment(renderTargets.extraTextures[1], 0, AccessFlags.Read);
+                    builder.SetRenderFunc(static (UVOriginPassData data, RasterGraphContext context) =>
+                    {
+                        // Check the backbuffer is using the UV origin we expect
+                        Assert.AreEqual(data.backBufferUVOrigin, context.GetTextureUVOrigin(data.renderAttachment));
+                    });
+                }
+
+                var result = m_RenderGraph.CompileNativeRenderGraph(m_RenderGraph.ComputeGraphHash());
+                var passes = result.contextData.GetNativePasses();
+
+                Assert.AreEqual(2, passes.Count);
+                Assert.AreEqual(2, passes[0].attachments.size);
+                Assert.AreEqual(1, passes[0].numGraphPasses);
+                Assert.AreEqual(1, passes[0].numNativeSubPasses);
+
+                Assert.AreEqual(2, passes[1].attachments.size);
+                Assert.AreEqual(2, passes[1].numGraphPasses);
+                Assert.AreEqual(2, passes[1].numNativeSubPasses);
+            };
+
+            m_Camera.Render();
+
+            m_RenderGraph.Cleanup();
         }
     }
 }

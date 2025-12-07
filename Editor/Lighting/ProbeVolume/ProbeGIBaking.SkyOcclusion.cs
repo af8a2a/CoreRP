@@ -213,6 +213,9 @@ namespace UnityEngine.Rendering
                     if (!s_TracingContext.TryGetMeshForAccelerationStructure(renderer.component, out var mesh))
                         continue;
 
+                    if (renderer.component is SkinnedMeshRenderer)
+                        continue;
+
                     int subMeshCount = mesh.subMeshCount;
                     var matIndices = GetMaterialIndices(renderer.component);
                     var perSubMeshMask = new uint[subMeshCount];
@@ -220,13 +223,13 @@ namespace UnityEngine.Rendering
                     Span<bool> perSubMeshOpaqueness = stackalloc bool[subMeshCount];
                     perSubMeshOpaqueness.Fill(true);
 
-                    accelStruct.AddInstance(renderer.component.GetInstanceID(), renderer.component, perSubMeshMask, matIndices, perSubMeshOpaqueness, 1);
+                    accelStruct.AddInstance((int)renderer.component.GetEntityId().GetRawData(), renderer.component, perSubMeshMask, matIndices, perSubMeshOpaqueness, 1);
                 }
 
                 foreach (var terrain in contributors.terrains)
                 {
                     uint mask = GetInstanceMask(terrain.component.shadowCastingMode);
-                    accelStruct.AddInstance(terrain.component.GetInstanceID(), terrain.component, new uint[1] { mask }, new uint[1] { 0 }, new bool[1] { true }, 1);
+                    accelStruct.AddInstance(terrain.component.GetEntityId(), terrain.component, new uint[1] { mask }, new uint[1] { 0 }, new bool[1] { true }, 1);
                 }
 
                 return accelStruct;

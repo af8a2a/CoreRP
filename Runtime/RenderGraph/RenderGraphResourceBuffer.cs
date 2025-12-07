@@ -9,7 +9,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
     /// </summary>
     [DebuggerDisplay("Buffer ({handle.index})")]
     [MovedFrom(true, "UnityEngine.Experimental.Rendering.RenderGraphModule", "UnityEngine.Rendering.RenderGraphModule")]
-    public struct BufferHandle
+    public readonly partial struct BufferHandle
     {
         // Minor Warning: This calls the zeroing constructor this means that the embedded ResourceHandle struct will also be zero-ed
         // which then means ResourceHandle.type will be set to zero == Texture. As this is an "invalid" bufferhandle I guess setting it
@@ -22,7 +22,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
         /// <value>A null graphics buffer handle.</value>
         public static BufferHandle nullHandle { get { return s_NullHandle; } }
 
-        internal ResourceHandle handle;
+        internal readonly ResourceHandle handle;
 
         internal BufferHandle(in ResourceHandle h) { handle = h; }
 
@@ -45,7 +45,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
     /// <summary>
     /// Descriptor used to create graphics buffer resources
     /// </summary>
-    public struct BufferDesc
+    public partial struct BufferDesc
     {
         ///<summary>Number of elements in the buffer..</summary>
         public int count;
@@ -72,22 +72,6 @@ namespace UnityEngine.Rendering.RenderGraphModule
             this.usageFlags = GraphicsBuffer.UsageFlags.None;
         }
         
-        /// <summary>
-        /// BufferDesc constructor.
-        /// </summary>
-        /// <param name="count">Number of elements in the buffer.</param>
-        /// <param name="stride">Size of one element in the buffer.</param>
-        /// <param name="target">Type of the buffer.</param>
-        public BufferDesc(int count, int stride, string name, GraphicsBuffer.Target target = GraphicsBuffer.Target.Structured)
-            : this()
-        {
-            this.count = count;
-            this.stride = stride;
-            this.target = target;
-            this.name = name;
-            this.usageFlags = GraphicsBuffer.UsageFlags.None;
-        }
-
 
         /// <summary>
         /// BufferDesc constructor.

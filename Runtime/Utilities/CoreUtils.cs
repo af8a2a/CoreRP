@@ -5,14 +5,20 @@ using System.Collections.Generic;
 using UnityEngine.Experimental.Rendering;
 using System.Runtime.CompilerServices;
 
+#if UNITY_EDITOR
+using UnityEditor;
+using System.Reflection;
+#endif
+
 namespace UnityEngine.Rendering
 {
+    using static UnityEngine.Rendering.HableCurve;
     using UnityObject = UnityEngine.Object;
 
     /// <summary>
     /// Set of utility functions for the Core Scriptable Render Pipeline Library
     /// </summary>
-    public static class CoreUtils
+    public static partial class CoreUtils
     {
 #if UNITY_EDITOR
         static CoreUtils()
@@ -1311,23 +1317,6 @@ namespace UnityEngine.Rendering
             else
                 cs.DisableKeyword(keyword);
         }
-        
-        // Caution: such a call should not be use interleaved with command buffer command, as it is immediate
-        /// <summary>
-        /// Set a keyword immediately on a compute shader
-        /// </summary>
-        /// <param name="cmd">CommandBuffer on which to set the global keyword.</param>
-        /// <param name="cs">Compute Shader on which to set the keyword.</param>
-        /// <param name="keyword">Keyword to be set.</param>
-        /// <param name="state">Value of the keyword to be set.</param>
-        public static void SetKeyword(ComputeCommandBuffer cmd, ComputeShader cs, string keyword, bool state)
-        {
-            if (state)
-                cmd.m_WrappedCommandBuffer.EnableShaderKeyword(keyword);
-            else
-                cmd.m_WrappedCommandBuffer.DisableShaderKeyword(keyword);
-        }
-
 
         /// <summary>
         /// Destroys a UnityObject safely.
@@ -1380,7 +1369,7 @@ namespace UnityEngine.Rendering
         /// <returns>A list of types that inherit from the provided type.</returns>
         public static IEnumerable<Type> GetAllTypesDerivedFrom<T>()
         {
-#if UNITY_EDITOR && UNITY_2019_2_OR_NEWER
+#if UNITY_EDITOR
             return UnityEditor.TypeCache.GetTypesDerivedFrom<T>();
 #else
             var derivedTypes = new List<Type>();
@@ -1510,11 +1499,7 @@ namespace UnityEngine.Rendering
                 for (int i = 0; i < UnityEditor.SceneView.sceneViews.Count; i++) // Using a foreach on an ArrayList generates garbage ...
                 {
                     var sv = UnityEditor.SceneView.sceneViews[i] as UnityEditor.SceneView;
-#if UNITY_2020_2_OR_NEWER
                     if (sv.camera == camera && sv.sceneViewState.alwaysRefreshEnabled)
-#else
-                    if (sv.camera == camera && sv.sceneViewState.materialUpdateEnabled)
-#endif
                     {
                         animateMaterials = true;
                         break;
@@ -1737,7 +1722,7 @@ namespace UnityEngine.Rendering
 #if UNITY_EDITOR
                 hash = 23 * hash + texture.imageContentsHash.GetHashCode();
 #endif
-                hash = 23 * hash + texture.GetInstanceID().GetHashCode();
+                hash = 23 * hash + texture.GetEntityId().GetHashCode();
                 hash = 23 * hash + texture.graphicsFormat.GetHashCode();
                 hash = 23 * hash + texture.wrapMode.GetHashCode();
                 hash = 23 * hash + texture.width.GetHashCode();
@@ -1862,6 +1847,7 @@ namespace UnityEngine.Rendering
             var path = filePath.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar);
             if (!path.StartsWith("Assets" + Path.DirectorySeparatorChar, StringComparison.CurrentCultureIgnoreCase))
                 throw new ArgumentException($"Path should start with \"Assets/\". Got {filePath}.", filePath);
+
             var folderPath = Path.GetDirectoryName(path);
 
             if (!UnityEditor.AssetDatabase.IsValidFolder(folderPath))
@@ -1876,6 +1862,19 @@ namespace UnityEngine.Rendering
                     rootPath = newPath + Path.DirectorySeparatorChar;
                 }
             }
+        }
+
+        /// <summary>
+        /// Returns the icon for the given type if it has an IconAttribute.
+        /// </summary>
+        /// <typeparam name="T">Type parameter</typeparam>
+        /// <returns>Valid icon texture, or null none is found</returns>
+        public static Texture2D GetIconForType<T>() where T : UnityEngine.Object
+        {
+            var iconAttribute = typeof(T).GetCustomAttribute<IconAttribute>();
+            if (iconAttribute == null || string.IsNullOrEmpty(iconAttribute.path))
+                return null;
+            return EditorGUIUtility.IconContent(iconAttribute.path)?.image as Texture2D;
         }
 #endif
 
@@ -1913,7 +1912,7 @@ namespace UnityEngine.Rendering
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static GraphicsFormat GetDefaultDepthStencilFormat()
         {
-#if UNITY_SWITCH || UNITY_EMBEDDED_LINUX || UNITY_QNX || UNITY_ANDROID
+#if UNITY_SWITCH || UNITY_SWITCH2 || UNITY_EMBEDDED_LINUX || UNITY_QNX || UNITY_ANDROID
             return GraphicsFormat.D24_UNorm_S8_UInt;
 #else
             return GraphicsFormat.D32_SFloat_S8_UInt;
@@ -1927,7 +1926,7 @@ namespace UnityEngine.Rendering
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static GraphicsFormat GetDefaultDepthOnlyFormat()
         {
-#if UNITY_SWITCH || UNITY_EMBEDDED_LINUX || UNITY_QNX || UNITY_ANDROID
+#if UNITY_SWITCH || UNITY_SWITCH2 || UNITY_EMBEDDED_LINUX || UNITY_QNX || UNITY_ANDROID
             return GraphicsFormatUtility.GetDepthStencilFormat(24, 0); // returns GraphicsFormat.D24_UNorm when hardware supports it
 #else
             return GraphicsFormat.D32_SFloat;
@@ -1941,13 +1940,13 @@ namespace UnityEngine.Rendering
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static DepthBits GetDefaultDepthBufferBits()
         {
-#if UNITY_SWITCH || UNITY_EMBEDDED_LINUX || UNITY_QNX || UNITY_ANDROID
+#if UNITY_SWITCH || UNITY_SWITCH2 || UNITY_EMBEDDED_LINUX || UNITY_QNX || UNITY_ANDROID
             return DepthBits.Depth24;
 #else
             return DepthBits.Depth32;
 #endif
         }
-        
+
 #if UNITY_EDITOR
         /// <summary>
         /// Populates null fields or collection elements in a target object from a source object of the same type.
@@ -1962,12 +1961,12 @@ namespace UnityEngine.Rendering
         /// The target object to populate with values from the source object. This cannot be null.
         /// </param>
         /// <remarks>
-        /// This method copies non-null field values or collection elements from the source object to the target object. 
-        /// Both objects must be of the same type, and derived or base types are not allowed. Fields are updated only if they 
-        /// are null in the target. If a field is a collection implementing `IList`, the method attempts to copy elements that 
+        /// This method copies non-null field values or collection elements from the source object to the target object.
+        /// Both objects must be of the same type, and derived or base types are not allowed. Fields are updated only if they
+        /// are null in the target. If a field is a collection implementing `IList`, the method attempts to copy elements that
         /// are null in the target collection.
         ///
-        /// **Type restrictions**:  
+        /// **Type restrictions**:
         /// - `T` must be a reference type.
         /// - `source` and `target` must be of the exact same type, not derived or base types.
         /// - Collections must implement `IList` and have the same length in both source and target for element-by-element copying.
@@ -1980,7 +1979,7 @@ namespace UnityEngine.Rendering
 
             if (target == null)
                 throw new ArgumentNullException(nameof(target));
-            
+
             if (source.GetType() != typeof(T) || target.GetType() != typeof(T))
             {
                 throw new ArgumentException("Source and target must be of the exact same type. Derived or base types are not allowed.");
@@ -2003,14 +2002,14 @@ namespace UnityEngine.Rendering
                 else
                 {
                     // Handle individual field population
-                    if (targetValue == null) 
+                    if (targetValue == null)
                         field.SetValue(target, sourceValue); // Copy if target is null
                 }
             }
             // Generic method to populate arrays
             static void PopulateIListFields(ref object source, ref object target)
             {
-                if (source is not IList sourceCollection) 
+                if (source is not IList sourceCollection)
                     return;
 
                 if (target is not IList targetCollection)

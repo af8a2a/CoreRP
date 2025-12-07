@@ -422,6 +422,16 @@ namespace UnityEngine.Rendering
             Shader.EnableKeyword(useLegacyLightmapsKeyword);
 
             InsertIntoPlayerLoop();
+
+            string extraText = IsForcedOnViaCommandLine() ? " (forced on via commandline)" : "";
+            extraText = MaintainContext ? " (forced on via MaintainContext)" : extraText;
+            if (settings.enableOcclusionCulling)
+            {
+                string occlusionText = IsOcclusionForcedOnViaCommandLine() ? " (forced on via commandline)" : "";
+                occlusionText = ForceOcclusion ? " (forced on via ForceOcclusion)" : occlusionText;
+                extraText = $"{extraText} with GPU Occlusion Culling{occlusionText}";
+            }
+            Console.WriteLine($"GPU Resident Drawer created{extraText}.");
         }
 
         private void Dispose()
@@ -460,6 +470,8 @@ namespace UnityEngine.Rendering
             m_GPUDrivenProcessor.Dispose();
 
             m_ContextIntPtr = IntPtr.Zero;
+
+            Console.WriteLine($"GPU Resident Drawer disposed.");
         }
 
         private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
@@ -500,7 +512,7 @@ namespace UnityEngine.Rendering
             bool newFrame = false;
             foreach (Camera camera in cameras)
             {
-                int instanceID = camera.GetInstanceID();
+                int instanceID = camera.GetEntityId();
                 if (m_FrameCameraIDs.Length == 0 || m_FrameCameraIDs.Contains(instanceID))
                 {
                     newFrame = true;
@@ -532,7 +544,7 @@ namespace UnityEngine.Rendering
             var rendererIDs = new NativeArray<EntityId>(renderers.Length, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
 
             for (int i = 0; i < renderers.Length; ++i)
-                rendererIDs[i] = renderers[i] ? renderers[i].GetInstanceID() : 0;
+                rendererIDs[i] = renderers[i] ? renderers[i].GetEntityId() : 0;
 
             m_Batcher.UpdateSelectedRenderers(rendererIDs);
 

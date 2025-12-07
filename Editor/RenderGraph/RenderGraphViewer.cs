@@ -901,6 +901,11 @@ namespace UnityEditor.Rendering
             autoPlayToggle.text = evt.newValue ? L10n.Tr("Auto Update") : L10n.Tr("Pause");
             m_Paused = evt.newValue;
 
+            if (!m_Paused && !m_IsDeviceConnected && m_ConnectedDeviceName != k_EditorName)
+            {
+                ConnectDebugSession<RenderGraphEditorLocalDebugSession>();
+            }
+
             UpdateStatusLabel();
 
             // Force update when unpausing
@@ -914,6 +919,10 @@ namespace UnityEditor.Rendering
             return (Convert.ToInt32(value) & Convert.ToInt32(flag)) == Convert.ToInt32(flag);
         }
 
+        // Need to keep track of the ToggleDropdown event handlers to be able to remove them when rebuilding the UI
+        readonly Dictionary<ToggleDropdown, Action<bool>> m_ToggleHandlers = new();
+        readonly Dictionary<ToggleDropdown, Action<int[]>> m_SelectionHandlers = new();
+
         void BuildEnumFlagsToggleDropdown<T>(ToggleDropdown dropdown, T currentValue, string prefsKey, Action<T> setValue, bool defaultEnabled = true) where T : Enum
         {
             if (!HasValidDebugData)
@@ -922,6 +931,12 @@ namespace UnityEditor.Rendering
                 return;
             }
             dropdown.style.display = DisplayStyle.Flex;
+
+            // Unsubscribe old handlers if present
+            if (m_ToggleHandlers.TryGetValue(dropdown, out var oldToggleChanged))
+                dropdown.toggleChanged -= oldToggleChanged;
+            if (m_SelectionHandlers.TryGetValue(dropdown, out var oldSelectionChanged))
+                dropdown.selectionChanged -= oldSelectionChanged;
 
             Array enumValues = Enum.GetValues(typeof(T));
             List<string> optionNames = new List<string>();
@@ -954,13 +969,15 @@ namespace UnityEditor.Rendering
             dropdown.SetEnabled(isEnabled);
             UpdateFilterEnabledState(prefsKey, isEnabled);
 
-            dropdown.toggleChanged += (enabled) => {
+            Action<bool> toggleChanged = enabled =>
+            {
                 UpdateFilterEnabledState(prefsKey, enabled);
                 SaveFilterEnabledState(prefsKey, enabled);
                 RebuildGraphViewerUI();
             };
 
-            dropdown.selectionChanged += (indices) => {
+            Action<int[]> selectionChanged = indices =>
+            {
                 int newValueInt = 0;
                 foreach (int index in indices)
                 {
@@ -979,6 +996,12 @@ namespace UnityEditor.Rendering
                     RebuildGraphViewerUI();
                 }
             };
+
+            m_ToggleHandlers[dropdown] = toggleChanged;
+            dropdown.toggleChanged += toggleChanged;
+
+            m_SelectionHandlers[dropdown] = selectionChanged;
+            dropdown.selectionChanged += selectionChanged;
         }
 
         bool GetFilterEnabledState(string prefsKey, bool defaultValue)
@@ -2064,7 +2087,7 @@ namespace UnityEditor.Rendering
 
         void CreateGUI()
         {
-            s_EditorWindowInstanceId = GetInstanceID();
+            s_EditorWindowInstanceId = GetEntityId();
 
             if (EditorPrefs.HasKey(kPassFilterLegacyEditorPrefsKey))
                 m_PassFilterLegacy = (PassFilterLegacy)EditorPrefs.GetInt(kPassFilterLegacyEditorPrefsKey);
@@ -2100,7 +2123,7 @@ namespace UnityEditor.Rendering
                 else
                 {
                     m_ConnectedDeviceName = k_EditorName;
-                    m_IsDeviceConnected = false;
+                    m_IsDeviceConnected = true;
                 }
 
                 connectionState.Dispose(); // Dispose it immediately after use
@@ -2120,7 +2143,7 @@ namespace UnityEditor.Rendering
             // maximized, seemingly nothing happens. When it gets unmaximized, both OnEnable() and OnDisable() get called
             // on a new EditorWindow instance, which I guess was the maximized one? Anyway we need to ignore this event
             // because the DebugSession is static and we don't want to unsubscribe because the window is still open.
-            if (s_EditorWindowInstanceId != GetInstanceID())
+            if (s_EditorWindowInstanceId != GetEntityId())
                 return;
 
             m_CurrentDebugData?.Clear();
@@ -2157,7 +2180,14 @@ namespace UnityEditor.Rendering
                 }
             }
 
-            ConnectDebugSession<RenderGraphEditorLocalDebugSession>();
+            if (!m_Paused)
+            {
+                ConnectDebugSession<RenderGraphEditorLocalDebugSession>();
+            }
+            else
+            {
+                UpdateStatusLabel();
+            }
         }
 
         internal void ConnectDebugSession<TSession>()
@@ -2165,7 +2195,7 @@ namespace UnityEditor.Rendering
         {
             if (typeof(TSession) == typeof(RenderGraphEditorLocalDebugSession))
             {
-                if (!m_IsDeviceConnected)
+                if (m_ConnectedDeviceName == "Unknown" || m_ConnectedDeviceName == k_EditorName)
                 {
                     m_ConnectedDeviceName = k_EditorName;
                     m_IsDeviceConnected = true;

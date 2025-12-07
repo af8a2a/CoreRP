@@ -113,6 +113,12 @@ namespace UnityEngine.Rendering.RenderGraphModule
             internal static string UseTransientTextureInWrongPass(int transientIndex) =>
                 $"This pass is using a transient resource from a different pass (pass index {transientIndex}). A transient resource should only be used in a single pass.";
 
+            internal static string IncompatibleTextureUVOrigin(TextureUVOriginSelection origin, string attachmentType, string attachmentName, RenderGraphResourceType attachmentResourceType, int attachmentResourceIndex, TextureUVOriginSelection attachmentOrigin) =>
+                $"TextureUVOrigin `{origin}` is not compatible with existing {attachmentType} attachment `{attachmentType}` of type `{attachmentResourceType}` at index `{attachmentResourceIndex}` with TextureUVOrigin `{attachmentOrigin}`";
+
+            internal static string IncompatibleTextureUVOriginUseTexture(TextureUVOriginSelection origin) =>
+                $"UseTexture() of a resource with `{origin}` is not compatible with Unity's standard UV origin for texture reading {TextureUVOrigin.BottomLeft}. Are you trying to UseTexture() on a backbuffer?";
+
             // RenderGraphPass
             internal const string k_MoreThanOneResourceForMRTIndex =
                 "You can only bind a single texture to a single index in a multiple render texture (MRT). Verify your indexes are correct.";
@@ -142,6 +148,12 @@ namespace UnityEngine.Rendering.RenderGraphModule
             internal const string k_AttachmentsDoNotMatch =
                 "Low level rendergraph error: Attachments in renderpass do not match.";
 
+            internal const string k_MultisampledShaderResolveInvalidAttachmentSetup =
+                "Low level rendergraph error: last subpass with shader resolve must have one color attachment.";
+
+            internal const string k_MultisampledShaderResolveInputAttachmentNotMemoryless =
+                "Low level rendergraph error: last subpass with shader resolve must have all input attachments as memoryless attachments.";
+
             internal const string k_InvalidMRTSetup = "Multiple render texture (MRT) setup is invalid. Some indices are not used.";
 
             internal const string k_NoDepthBufferMRT = "Setting multiple render textures (MRTs) without a depth buffer is not supported.";
@@ -161,6 +173,9 @@ namespace UnityEngine.Rendering.RenderGraphModule
                 "Pass '" + passName + "' is using the legacy rendergraph API." +
                 " You cannot use legacy passes with the Native Render Pass Compiler." +
                 " The APIs that are compatible with the Native Render Pass Compiler are AddUnsafePass, AddComputePass and AddRasterRenderPass.";
+
+            internal static string IncompatibleTextureUVOriginStore(string firstAttachmentName, TextureUVOriginSelection firstAttachmentOrigin, string secondAttachmentName, TextureUVOriginSelection secondAttachmentOrigin) =>
+                $"Texture attachment {firstAttachmentName} with uv origin {firstAttachmentOrigin} does not match with texture attachment {secondAttachmentName} with uv origin {secondAttachmentOrigin}. Storing both would result in contents being flipped.";
 
             internal static string GetExceptionMessage(RenderGraphState state)
             {
