@@ -4,6 +4,9 @@ using System.IO;
 using System.Collections.Generic;
 using UnityEngine.Experimental.Rendering;
 using System.Runtime.CompilerServices;
+#if UNITY_6000_5_OR_NEWER
+using UnityEngine.Assemblies;
+#endif
 
 #if UNITY_EDITOR
 using UnityEditor;
@@ -1345,11 +1348,15 @@ namespace UnityEngine.Rendering
         /// <returns>The list of all assembly types of the current domain.</returns>
         public static IEnumerable<Type> GetAllAssemblyTypes()
         {
-            if (s_AssemblyTypes != null) 
+            if (s_AssemblyTypes != null)
                 return s_AssemblyTypes;
-            
+
             var typeList = new List<Type>();
+#if UNITY_6000_5_OR_NEWER
+            foreach (var assembly in CurrentAssemblies.GetLoadedAssemblies())
+#else
             foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+#endif
             {
                 try
                 {
@@ -1945,6 +1952,37 @@ namespace UnityEngine.Rendering
 #else
             return DepthBits.Depth32;
 #endif
+        }
+
+        /// <summary>
+        /// Indicates whether the combined camera viewports fully cover the screen area.
+        /// </summary>
+        /// <param name="cameras">List of cameras to render.</param>
+        /// <returns>True if the combined camera viewports fully cover the screen area.</returns>
+        public static bool IsScreenFullyCoveredByCameras(List<Camera> cameras)
+        {
+            if (cameras == null || cameras.Count == 0)
+                return false;
+
+            bool isScreenFullyCovered = false;
+            using (ListPool<Rect>.Get(out var cameraRects))
+            {
+                // We don't need to exclude stacked cameras for the input camera list because the overlay camera have the same viewport with its base camera.
+                foreach (var camera in cameras)
+                {
+                    if (camera.targetTexture != null || camera.cameraType != CameraType.Game)
+                        continue;
+
+                    // Skip test if any viewport is full-screen
+                    if (Mathf.Approximately(camera.rect.xMin, 0f) && Mathf.Approximately(camera.rect.yMin, 0f) && camera.rect.width >= Screen.width && camera.rect.height >= Screen.height)
+                        return true;
+
+                    cameraRects.Add(camera.rect);
+                }
+                isScreenFullyCovered = Mathf.Approximately(SweepLineRectUtils.CalculateRectUnionArea(cameraRects), 1f);
+            }
+
+            return isScreenFullyCovered;
         }
 
 #if UNITY_EDITOR

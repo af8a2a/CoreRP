@@ -30,7 +30,10 @@ namespace UnityEditor.Rendering.Converter
                 contextSearchQueriesAndIds,
                 (item, description) =>
                 {
-                    var assetItem = new RenderPipelineConverterAssetItem(item.id);
+                    var assetItem = new RenderPipelineConverterAssetItem(item.id)
+                    {
+                        info = description
+                    };
                     assets.Add(assetItem);
                 },
                 OnSearchFinish
@@ -49,7 +52,7 @@ namespace UnityEditor.Rendering.Converter
 
             if (obj == null)
             {
-                message = $"Failed to load {assetItem.name} Global ID {assetItem.guid} Asset Path {assetItem.assetPath}";
+                message = $"Failed to load {assetItem.name} Global ID {assetItem.GlobalObjectId} Asset Path {assetItem.assetPath}";
                 return Status.Error;
             }
 

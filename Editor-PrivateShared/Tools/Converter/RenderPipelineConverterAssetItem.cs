@@ -7,23 +7,57 @@ namespace UnityEditor.Rendering.Converter
     [Serializable]
     internal class RenderPipelineConverterAssetItem : IRenderPipelineConverterItem
     {
-        public string assetPath { get; }
-        public string guid { get; }
+        [SerializeField]
+        private string m_AssetPath;
 
-        public string name => assetPath;
+        public string assetPath
+        {
+            get => m_AssetPath;
+            protected set => m_AssetPath = value;
+        }
 
-        public string info => guid;
+        [SerializeField]
+        private string m_GlobalObjectId;
 
-        public bool isEnabled { get; set; }
-        public string isDisabledMessage { get; set; }
+        public string GlobalObjectId => m_GlobalObjectId;
+
+        public string name => System.IO.Path.GetFileNameWithoutExtension(assetPath);
+
+        [SerializeField]
+        private string m_Info;
+
+        public string info
+        {
+            get => m_Info;
+            set => m_Info = value;
+        }
+
+        public bool isEnabled { get; set; } = true;
+        public string isDisabledMessage { get; set; } = string.Empty;
+
+        public Texture2D icon
+        {
+            get
+            {
+                if (!string.IsNullOrEmpty(assetPath))
+                {
+                    // Get the cached icon without loading the asset
+                    var icon = AssetDatabase.GetCachedIcon(assetPath);
+                    if (icon != null)
+                        return icon as Texture2D;
+                }
+
+                return null;
+            }
+        }
 
         public RenderPipelineConverterAssetItem(string id)
         {
-            if (!GlobalObjectId.TryParse(id, out var gid))
+            if (!UnityEditor.GlobalObjectId.TryParse(id, out var gid))
                 throw new ArgumentException(nameof(id), $"Unable to perform GlobalObjectId.TryParse with the given id {id}");
 
-            assetPath = AssetDatabase.GUIDToAssetPath(gid.assetGUID);
-            guid = gid.ToString();
+            m_AssetPath = AssetDatabase.GUIDToAssetPath(gid.assetGUID);
+            m_GlobalObjectId = gid.ToString();
         }
 
         public RenderPipelineConverterAssetItem(GlobalObjectId gid, string assetPath)
@@ -31,21 +65,21 @@ namespace UnityEditor.Rendering.Converter
             if (!AssetDatabase.AssetPathExists(assetPath))
                 throw new ArgumentException(nameof(assetPath), $"{assetPath} does not exist");
 
-            this.assetPath = assetPath;
-            guid = gid.ToString();
+            m_AssetPath = assetPath;
+            m_GlobalObjectId = gid.ToString();
         }
 
         public UnityEngine.Object LoadObject()
         {
             UnityEngine.Object obj = null;
 
-            if (GlobalObjectId.TryParse(guid, out var globalId))
+            if (UnityEditor.GlobalObjectId.TryParse(GlobalObjectId, out var globalId))
             {
                 // Try loading the object
                 // TODO: Upcoming changes to GlobalObjectIdentifierToObjectSlow will allow it
                 //       to return direct references to prefabs and their children.
                 //       Once that change happens there are several items which should be adjusted.
-                obj = GlobalObjectId.GlobalObjectIdentifierToObjectSlow(globalId);
+                obj = UnityEditor.GlobalObjectId.GlobalObjectIdentifierToObjectSlow(globalId);
 
                 // If the object was not loaded, it is probably part of an unopened scene or prefab;
                 // if so, then the solution is to first load the scene here.
@@ -69,7 +103,7 @@ namespace UnityEditor.Rendering.Converter
                     // Reload object if it is still null (because it's in a previously unopened scene)
                     if (!obj)
                     {
-                        obj = GlobalObjectId.GlobalObjectIdentifierToObjectSlow(globalId);
+                        obj = UnityEditor.GlobalObjectId.GlobalObjectIdentifierToObjectSlow(globalId);
                     }
                 }
             }
@@ -79,7 +113,9 @@ namespace UnityEditor.Rendering.Converter
 
         public void OnClicked()
         {
-            EditorGUIUtility.PingObject(AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(assetPath));
+            var obj = LoadObject();
+            if (obj != null)
+                EditorGUIUtility.PingObject(obj);
         }
     }
 }

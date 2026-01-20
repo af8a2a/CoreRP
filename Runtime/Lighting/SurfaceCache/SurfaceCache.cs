@@ -122,45 +122,46 @@ namespace UnityEngine.Rendering
         }
     }
 
-    internal class SurfaceCacheGrid : IDisposable
+    internal class SurfaceCacheVolume : IDisposable
     {
         public const int InvalidOffset = Int32.MaxValue;
         public const uint InvalidPatchIndex = UInt32.MaxValue; // Must match HLSL side.
 
-        public readonly uint GridSize;
+        public readonly uint SpatialResolution;
         public readonly uint CascadeCount;
         public readonly float VoxelMinSize;
+        public readonly int3[] CascadeOffsets;
+        public readonly GraphicsBuffer CascadeOffsetBuffer;
+        public readonly GraphicsBuffer CellAllocationMarks;
+        public readonly GraphicsBuffer CellPatchIndices;
+
         public Vector3 TargetPos = Vector3.zero;
 
-        public int3[] CascadeOffsets;
-
-        public GraphicsBuffer CascadeOffsetBuffer;
-
-        public GraphicsBuffer CellAllocationMarks;
-        public GraphicsBuffer CellPatchIndices;
-
-        internal SurfaceCacheGrid(uint gridSize, uint cascadeCount, float voxelMinSize)
+        internal SurfaceCacheVolume(uint spatialResolution, uint cascadeCount, float size)
         {
-            GridSize = gridSize;
+            const uint angularResolution = 4; // Must match HLSL side.
+            uint cellCount = spatialResolution * spatialResolution * spatialResolution * angularResolution * angularResolution * cascadeCount;
+
+            SpatialResolution = spatialResolution;
             CascadeCount = cascadeCount;
-            VoxelMinSize = voxelMinSize;
+            VoxelMinSize = size / (spatialResolution * (float)(1u << (int)(cascadeCount - 1u)));
             CascadeOffsets = new int3[cascadeCount];
+            CascadeOffsetBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, (int)cascadeCount, sizeof(int) * 3);
+            CellAllocationMarks = new GraphicsBuffer(GraphicsBuffer.Target.Structured, (int)(cellCount), sizeof(uint));
+            CellPatchIndices = new GraphicsBuffer(GraphicsBuffer.Target.Structured, (int)(cellCount), sizeof(uint));
+
+            {
+                var initBuffer = new uint[cellCount];
+                CellAllocationMarks.SetData(initBuffer);
+                for (int i = 0; i < cellCount; ++i)
+                    initBuffer[i] = InvalidPatchIndex;
+                CellPatchIndices.SetData(initBuffer);
+            }
+
             for (int i = 0; i < cascadeCount; ++i)
             {
                 CascadeOffsets[i] = new int3(InvalidOffset, InvalidOffset, InvalidOffset);
             }
-            CascadeOffsetBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, (int)cascadeCount, sizeof(int) * 3);
-
-            const uint angularResolution = 4; // Must match HLSL side.
-            uint cellCount = gridSize * gridSize * gridSize * angularResolution * angularResolution * cascadeCount;
-            var initBuffer = new uint[cellCount];
-
-            CellAllocationMarks = new GraphicsBuffer(GraphicsBuffer.Target.Structured, (int)(cellCount), sizeof(uint));
-            CellAllocationMarks.SetData(initBuffer);
-            CellPatchIndices = new GraphicsBuffer(GraphicsBuffer.Target.Structured, (int)(cellCount), sizeof(uint));
-            for (int i = 0; i < cellCount; ++i)
-                initBuffer[i] = InvalidPatchIndex;
-            CellPatchIndices.SetData(initBuffer);
         }
 
         public void Dispose()
@@ -178,10 +179,10 @@ namespace UnityEngine.Rendering
         Ris
     }
 
-    internal struct SurfaceCacheGridParameterSet
+    internal struct SurfaceCacheVolumeParameterSet
     {
-        public uint GridSize;
-        public float VoxelMinSize;
+        public float Size;
+        public uint Resolution;
         public uint CascadeCount;
     }
 
@@ -222,6 +223,7 @@ namespace UnityEngine.Rendering
         internal uint3 DefragKernelGroupSize;
         internal LocalKeyword DefragKeyword;
 
+        internal IRayTracingShader PunctualLightSamplingShader;
         internal IRayTracingShader UniformEstimationShader;
         internal IRayTracingShader RestirCandidateTemporalShader;
         internal IRayTracingShader RisEstimationShader;
@@ -288,22 +290,26 @@ namespace UnityEngine.Rendering
             DefragKeyword = new LocalKeyword(DefragShader, defragKeyword);
             DefragShader.DisableKeyword(defragKeyword);
 
+            Object punctualLightSamplingUnifiedObj;
             Object uniformEstimationUnifiedObj;
             Object restirCandidateTemporalUnifiedObj;
             Object risEstimationUnifiedObj;
             if (rtContext.BackendType == RayTracingBackend.Compute)
             {
+                punctualLightSamplingUnifiedObj = rpResources.punctualLightSamplingComputeShader;
                 uniformEstimationUnifiedObj = rpResources.uniformEstimationComputeShader;
                 restirCandidateTemporalUnifiedObj = rpResources.restirCandidateTemporalComputeShader;
                 risEstimationUnifiedObj = rpResources.risEstimationComputeShader;
             }
             else
             {
+                punctualLightSamplingUnifiedObj = rpResources.punctualLightSamplingRayTracingShader;
                 uniformEstimationUnifiedObj = rpResources.uniformEstimationRayTracingShader;
                 restirCandidateTemporalUnifiedObj = rpResources.restirCandidateTemporalRayTracingShader;
                 risEstimationUnifiedObj = rpResources.risEstimationRayTracingShader;
             }
 
+            PunctualLightSamplingShader = rtContext.CreateRayTracingShader(punctualLightSamplingUnifiedObj);
             UniformEstimationShader = rtContext.CreateRayTracingShader(uniformEstimationUnifiedObj);
             RestirCandidateTemporalShader = rtContext.CreateRayTracingShader(restirCandidateTemporalUnifiedObj);
             RisEstimationShader = rtContext.CreateRayTracingShader(risEstimationUnifiedObj);
@@ -315,8 +321,9 @@ namespace UnityEngine.Rendering
     internal class SurfaceCache : IDisposable
     {
         public const uint CascadeMax = 8;
-        private readonly SurfaceCachePatchList _patchList;
-        private readonly SurfaceCacheGrid _grid;
+        private readonly GraphicsBuffer _punctualLightSamples;
+        private readonly SurfaceCachePatchList _patches;
+        private readonly SurfaceCacheVolume _volume;
         private readonly SurfaceCacheRingConfig _ringConfig;
         private readonly SurfaceCacheResourceSet _resources;
         private GraphicsBuffer _traceScratch;
@@ -325,12 +332,12 @@ namespace UnityEngine.Rendering
         private SurfaceCachePatchFilteringParameterSet _patchFilteringParams;
 
         private float _shortHysteresis;
-        readonly private uint _defragCount = 2;
-        readonly private uint _environmentCubemapResolution = 32;
+        readonly private uint _defragCount;
         readonly private float _albedoBoost = 1.0f;
 
-        public SurfaceCachePatchList PatchList => _patchList;
-        public SurfaceCacheGrid Grid => _grid;
+        public GraphicsBuffer PunctualLightSamples => _punctualLightSamples;
+        public SurfaceCachePatchList Patches => _patches;
+        public SurfaceCacheVolume Volume => _volume;
         public SurfaceCacheRingConfig RingConfig => _ringConfig;
 
         private class ScrollingPassData
@@ -344,7 +351,7 @@ namespace UnityEngine.Rendering
             internal GraphicsBuffer NewCascadeOffsetsDevice;
             internal int3[] NewCascadeOffsetsHost;
             internal int3[] OldCascadeOffsetsHost;
-            internal uint GridSize;
+            internal uint VolumeSpatialResolution;
             internal uint CascadeCount;
         }
 
@@ -388,7 +395,8 @@ namespace UnityEngine.Rendering
         private class UniformEstimationPassData
         {
             internal uint PatchCapacity;
-            internal IRayTracingShader Shader;
+            internal IRayTracingShader PunctualLightSamplingShader;
+            internal IRayTracingShader EstimationShader;
             internal GraphicsBuffer RingConfigBuffer;
             internal GraphicsBuffer PatchIrradiances;
             internal GraphicsBuffer PatchGeometries;
@@ -396,19 +404,20 @@ namespace UnityEngine.Rendering
             internal GraphicsBuffer PatchCounterSets;
             internal GraphicsBuffer CellPatchIndices;
             internal GraphicsBuffer CascadeOffsets;
+            internal GraphicsBuffer PunctualLightSamples;
+            internal uint PunctualLightSampleCount;
             internal SurfaceCacheWorld World;
             internal float AlbedoBoost;
             internal uint FrameIdx;
-            internal uint GridSize;
             internal uint CascadeCount;
             internal bool MultiBounce;
             internal float ShortHysteresis;
             internal uint RingConfigOffset;
             internal uint SampleCount;
-            internal float VoxelMinSize;
-            internal Vector3 GridTargetPos;
+            internal uint VolumeSpatialResolution;
+            internal float VolumeVoxelMinSize;
+            internal Vector3 VolumeTargetPos;
             internal GraphicsBuffer TraceScratchBuffer;
-            internal uint EnvironmentCubemapResolution;
         }
 
         private class RestirCandidateTemporalPassData
@@ -421,19 +430,18 @@ namespace UnityEngine.Rendering
             internal GraphicsBuffer PatchRealizations;
             internal GraphicsBuffer CascadeOffsets;
             internal GraphicsBuffer CellPatchIndices;
-            internal Vector3 GridTargetPos;
+            internal Vector3 VolumeTargetPos;
             internal SurfaceCacheWorld World;
             internal float AlbedoBoost;
             internal uint FrameIdx;
-            internal uint GridSize;
             internal uint RingConfigOffset;
             internal uint CascadeCount;
             internal bool MultiBounce;
             internal uint ConfidenceCap;
-            internal float VoxelMinSize;
+            internal uint VolumeSpatialResolution;
+            internal float VolumeVoxelMinSize;
             internal uint ValidationFrameInterval;
             internal GraphicsBuffer TraceScratchBuffer;
-            internal uint EnvironmentCubemapResolution;
         }
 
         private class RestirSpatialPassData
@@ -443,13 +451,13 @@ namespace UnityEngine.Rendering
             internal uint3 ThreadGroupSize;
             internal uint PatchCapacity;
             internal uint FrameIdx;
-            internal uint GridSize;
             internal uint CascadeCount;
             internal uint RingConfigOffset;
-            internal float VoxelMinSize;
             internal uint SampleCount;
             internal float FilterSize;
-            internal Vector3 GridTargetPos;
+            internal uint VolumeSpatialResolution;
+            internal Vector3 VolumeTargetPos;
+            internal float VolumeVoxelMinSize;
             internal GraphicsBuffer CellPatchIndices;
             internal GraphicsBuffer CascadeOffsets;
             internal GraphicsBuffer RingConfigBuffer;
@@ -489,17 +497,16 @@ namespace UnityEngine.Rendering
             internal SurfaceCacheWorld World;
             internal float AlbedoBoost;
             internal uint FrameIdx;
-            internal uint GridSize;
             internal uint CascadeCount;
             internal bool MultiBounce;
             internal uint CandidateCount;
             internal uint RingConfigOffset;
             internal float ShortHysteresis;
-            internal Vector3 GridTargetPos;
+            internal uint VolumeSpatialResolution;
+            internal Vector3 VolumeTargetPos;
             internal float TargetFunctionUpdateWeight;
-            internal float VoxelMinSize;
+            internal float VolumeVoxelMinSize;
             internal GraphicsBuffer TraceScratchBuffer;
-            internal uint EnvironmentCubemapResolution;
         }
 
         private class SpatialFilterPassData
@@ -516,12 +523,12 @@ namespace UnityEngine.Rendering
             internal uint PatchCapacity;
             internal uint FrameIdx;
             internal uint CascadeCount;
-            internal uint GridSize;
-            internal float VoxelMinSize;
+            internal uint VolumeSpatialResolution;
+            internal float VolumeVoxelMinSize;
             internal uint SampleCount;
             internal float Radius;
             internal uint RingConfigOffset;
-            internal Vector3 GridTargetPos;
+            internal Vector3 VolumeTargetPos;
         }
 
         private class TemporalFilterPassData
@@ -549,13 +556,14 @@ namespace UnityEngine.Rendering
             public static readonly int _DirectionalLightDirection = Shader.PropertyToID("_DirectionalLightDirection");
             public static readonly int _DirectionalLightIntensity = Shader.PropertyToID("_DirectionalLightIntensity");
             public static readonly int _MaterialAtlasTexelSize = Shader.PropertyToID("_MaterialAtlasTexelSize");
+            public static readonly int _SpotLightCount = Shader.PropertyToID("_SpotLightCount");
             public static readonly int _TransmissionTextures = Shader.PropertyToID("_TransmissionTextures");
             public static readonly int _EmissionTextures = Shader.PropertyToID("_EmissionTextures");
-            public static readonly int _GridTargetPos = Shader.PropertyToID("_GridTargetPos");
+            public static readonly int _VolumeTargetPos = Shader.PropertyToID("_VolumeTargetPos");
             public static readonly int _EnvironmentCubemap = Shader.PropertyToID("_EnvironmentCubemap");
             public static readonly int _NewCascadeOffsets = Shader.PropertyToID("_NewCascadeOffsets");
             public static readonly int _OldCascadeOffsets = Shader.PropertyToID("_OldCascadeOffsets");
-            public static readonly int _GridSize = Shader.PropertyToID("_GridSize");
+            public static readonly int _VolumeSpatialResolution = Shader.PropertyToID("_VolumeSpatialResolution");
             public static readonly int _CascadeCount = Shader.PropertyToID("_CascadeCount");
             public static readonly int _ConfidenceCap = Shader.PropertyToID("_ConfidenceCap");
             public static readonly int _CandidateCount = Shader.PropertyToID("_CandidateCount");
@@ -564,10 +572,12 @@ namespace UnityEngine.Rendering
             public static readonly int _FilterSize = Shader.PropertyToID("_FilterSize");
             public static readonly int _MultiBounce = Shader.PropertyToID("_MultiBounce");
             public static readonly int _ValidationFrameInterval = Shader.PropertyToID("_ValidationFrameInterval");
-            public static readonly int _VoxelMinSize = Shader.PropertyToID("_VoxelMinSize");
+            public static readonly int _VolumeVoxelMinSize = Shader.PropertyToID("_VolumeVoxelMinSize");
+            public static readonly int _PunctualLightSampleCount = Shader.PropertyToID("_PunctualLightSampleCount");
             public static readonly int _ShortHysteresis = Shader.PropertyToID("_ShortHysteresis");
             public static readonly int _PatchCellIndices = Shader.PropertyToID("_PatchCellIndices");
             public static readonly int _RingConfigBuffer = Shader.PropertyToID("_RingConfigBuffer");
+            public static readonly int _SpotLights = Shader.PropertyToID("_SpotLights");
             public static readonly int _Radius = Shader.PropertyToID("_Radius");
             public static readonly int _InputPatchIrradiances = Shader.PropertyToID("_InputPatchIrradiances");
             public static readonly int _OutputPatchIrradiances = Shader.PropertyToID("_OutputPatchIrradiances");
@@ -582,6 +592,8 @@ namespace UnityEngine.Rendering
             public static readonly int _RingConfigWriteOffset = Shader.PropertyToID("_RingConfigWriteOffset");
             public static readonly int _PatchOffset = Shader.PropertyToID("_PatchOffset");
             public static readonly int _PatchGeometries = Shader.PropertyToID("_PatchGeometries");
+            public static readonly int _PunctualLightSamples = Shader.PropertyToID("_PunctualLightSamples");
+            public static readonly int _Samples = Shader.PropertyToID("_Samples");
             public static readonly int _PatchRealizations = Shader.PropertyToID("_PatchRealizations");
             public static readonly int _PatchAccumulatedLuminances = Shader.PropertyToID("_PatchAccumulatedLuminances");
             public static readonly int _InputPatchRealizations = Shader.PropertyToID("_InputPatchRealizations");
@@ -592,28 +604,33 @@ namespace UnityEngine.Rendering
 
         public SurfaceCache(
             SurfaceCacheResourceSet resources,
-            SurfaceCacheGridParameterSet gridParams,
+            uint defragCount,
+            SurfaceCacheVolumeParameterSet volParams,
             SurfaceCacheEstimationParameterSet estimationParams,
             SurfaceCachePatchFilteringParameterSet patchFilteringParams)
         {
-            Debug.Assert(gridParams.CascadeCount != 0);
-            Debug.Assert(gridParams.CascadeCount <= CascadeMax);
+            Debug.Assert(volParams.CascadeCount != 0);
+            Debug.Assert(volParams.CascadeCount <= CascadeMax);
             Debug.Assert(0.0f <= patchFilteringParams.TemporalSmoothing);
             Debug.Assert(patchFilteringParams.TemporalSmoothing <= 1.0f);
 
-            uint patchCapacity = 65536; // Must match HLSL side constant.
+            const uint punctualLightSampleCount = 128;
+            const uint patchCapacity = 65536; // Must match HLSL side constant.
             Debug.Assert((UInt64)4294967296 % (UInt64)patchCapacity == 0, "Patch Capacity must be a divisor of 2^32."); // This property is required by the HLSL side ring buffer allocation logic.
 
             _resources = resources;
-            _grid = new SurfaceCacheGrid(gridParams.GridSize, gridParams.CascadeCount, gridParams.VoxelMinSize);
+            _volume = new SurfaceCacheVolume(volParams.Resolution, volParams.CascadeCount, volParams.Size);
             _ringConfig = new SurfaceCacheRingConfig();
-            _patchList = new SurfaceCachePatchList(patchCapacity, estimationParams.Method);
+            _patches = new SurfaceCachePatchList(patchCapacity, estimationParams.Method);
+            _punctualLightSamples = new GraphicsBuffer(GraphicsBuffer.Target.Structured, (int)punctualLightSampleCount, sizeof(float) * 19);
 
             _estimationParams = estimationParams;
             _patchFilteringParams = patchFilteringParams;
 
             Debug.Assert(0.0f <= patchFilteringParams.TemporalSmoothing && patchFilteringParams.TemporalSmoothing <= 1.0f);
             _shortHysteresis = Mathf.Lerp(0.75f, 0.95f, patchFilteringParams.TemporalSmoothing);
+
+            _defragCount = defragCount;
         }
 
         public void RecordPreparation(RenderGraph renderGraph, uint frameIdx)
@@ -638,17 +655,17 @@ namespace UnityEngine.Rendering
                 passData.Shader = _resources.DefragShader;
                 passData.Keyword = _resources.DefragKeyword;
                 passData.KernelIndex = _resources.DefragKernel;
-                passData.PatchCapacity = PatchList.Capacity;
+                passData.PatchCapacity = Patches.Capacity;
                 passData.RingConfigStartFlipflop = RingConfig.FlipFlop;
                 passData.ThreadGroupSize = _resources.DefragKernelGroupSize;
                 passData.RingConfigBuffer = RingConfig.Buffer;
-                passData.PatchCellIndices = PatchList.CellIndices;
-                passData.PatchCounterSets = PatchList.CounterSets;
-                passData.PatchIrradiances0 = PatchList.Irradiances[0];
-                passData.PatchIrradiances1 = PatchList.Irradiances[2];
-                passData.PatchGeometries = PatchList.Geometries;
-                passData.PatchStatistics = PatchList.Statistics;
-                passData.CellPatchIndices = Grid.CellPatchIndices;
+                passData.PatchCellIndices = Patches.CellIndices;
+                passData.PatchCounterSets = Patches.CounterSets;
+                passData.PatchIrradiances0 = Patches.Irradiances[0];
+                passData.PatchIrradiances1 = Patches.Irradiances[2];
+                passData.PatchGeometries = Patches.Geometries;
+                passData.PatchStatistics = Patches.Statistics;
+                passData.CellPatchIndices = Volume.CellPatchIndices;
                 passData.EvenIterationPatchOffset = 0;
                 passData.OddIterationPatchOffset = _resources.SubGroupSize / 2;
 
@@ -669,11 +686,11 @@ namespace UnityEngine.Rendering
                 passData.ThreadGroupSize = _resources.EvictionKernelGroupSize;
                 passData.RingConfigBuffer = RingConfig.Buffer;
                 passData.RingConfigOffset = RingConfig.OffsetA;
-                passData.PatchCounterSets = PatchList.CounterSets;
-                passData.PatchCellIndices = PatchList.CellIndices;
-                passData.CellAllocationMarks = Grid.CellAllocationMarks;
-                passData.CellPatchIndices = Grid.CellPatchIndices;
-                passData.PatchCapacity = PatchList.Capacity;
+                passData.PatchCounterSets = Patches.CounterSets;
+                passData.PatchCellIndices = Patches.CellIndices;
+                passData.CellAllocationMarks = Volume.CellAllocationMarks;
+                passData.CellPatchIndices = Volume.CellPatchIndices;
+                passData.PatchCapacity = Patches.Capacity;
                 passData.FrameIdx = frameIdx;
 
                 builder.AllowGlobalStateModification(true); // Set to ensure ordering.
@@ -689,24 +706,24 @@ namespace UnityEngine.Rendering
                 outputIrradianceBufferIdx = 1;
                 using (var builder = renderGraph.AddComputePass("Surface Cache Spatial Filter", out SpatialFilterPassData passData))
                 {
-                    passData.InputPatchIrradiances = PatchList.Irradiances[0];
-                    passData.OutputPatchIrradiances = PatchList.Irradiances[1];
-                    passData.PatchGeometries = PatchList.Geometries;
+                    passData.InputPatchIrradiances = Patches.Irradiances[0];
+                    passData.OutputPatchIrradiances = Patches.Irradiances[1];
+                    passData.PatchGeometries = Patches.Geometries;
                     passData.RingConfigBuffer = RingConfig.Buffer;
                     passData.Shader = _resources.SpatialFilteringShader;
                     passData.KernelIndex = _resources.SpatialFilteringKernel;
                     passData.ThreadGroupSize = _resources.SpatialFilteringKernelGroupSize;
-                    passData.PatchCapacity = PatchList.Capacity;
+                    passData.PatchCapacity = Patches.Capacity;
                     passData.FrameIdx = frameIdx;
-                    passData.CascadeCount = Grid.CascadeCount;
-                    passData.GridSize = Grid.GridSize;
-                    passData.VoxelMinSize = Grid.VoxelMinSize;
+                    passData.CascadeCount = Volume.CascadeCount;
+                    passData.VolumeSpatialResolution = Volume.SpatialResolution;
+                    passData.VolumeVoxelMinSize = Volume.VoxelMinSize;
                     passData.SampleCount = _patchFilteringParams.SpatialFilterSampleCount;
                     passData.Radius = _patchFilteringParams.SpatialFilterRadius;
-                    passData.CellPatchIndices = Grid.CellPatchIndices;
-                    passData.CascadeOffsets = Grid.CascadeOffsetBuffer;
+                    passData.CellPatchIndices = Volume.CellPatchIndices;
+                    passData.CascadeOffsets = Volume.CascadeOffsetBuffer;
                     passData.RingConfigOffset = RingConfig.OffsetA;
-                    passData.GridTargetPos = Grid.TargetPos;
+                    passData.VolumeTargetPos = Volume.TargetPos;
 
                     builder.AllowGlobalStateModification(true); // Set to ensure ordering.
                     builder.SetRenderFunc((SpatialFilterPassData data, ComputeGraphContext cgContext) => FilterSpatially(data, cgContext));
@@ -720,12 +737,12 @@ namespace UnityEngine.Rendering
                     passData.Shader = _resources.TemporalFilteringShader;
                     passData.KernelIndex = _resources.TemporalFilteringKernel;
                     passData.ThreadGroupSize = _resources.TemporalFilteringKernelGroupSize;
-                    passData.InputPatchIrradiances = PatchList.Irradiances[outputIrradianceBufferIdx];
-                    passData.OutputPatchIrradiances = PatchList.Irradiances[2];
-                    passData.PatchStatistics = PatchList.Statistics;
+                    passData.InputPatchIrradiances = Patches.Irradiances[outputIrradianceBufferIdx];
+                    passData.OutputPatchIrradiances = Patches.Irradiances[2];
+                    passData.PatchStatistics = Patches.Statistics;
                     passData.RingConfigBuffer = RingConfig.Buffer;
-                    passData.PatchCounterSets = PatchList.CounterSets;
-                    passData.PatchCapacity = PatchList.Capacity;
+                    passData.PatchCounterSets = Patches.CounterSets;
+                    passData.PatchCapacity = Patches.Capacity;
                     passData.RingConfigOffset = RingConfig.OffsetA;
                     passData.ShortHysteresis = _shortHysteresis;
 
@@ -744,30 +761,33 @@ namespace UnityEngine.Rendering
             {
                 using (var builder = renderGraph.AddUnsafePass("Surface Cache Uniform Estimation", out UniformEstimationPassData passData))
                 {
-                    passData.PatchCapacity = PatchList.Capacity;
-                    passData.Shader = _resources.UniformEstimationShader;
+                    passData.PatchCapacity = Patches.Capacity;
+                    passData.PunctualLightSamplingShader = _resources.PunctualLightSamplingShader;
+                    passData.EstimationShader = _resources.UniformEstimationShader;
                     passData.RingConfigBuffer = RingConfig.Buffer;
-                    passData.PatchIrradiances = PatchList.Irradiances[0];
-                    passData.PatchGeometries = PatchList.Geometries;
-                    passData.PatchStatistics = PatchList.Statistics;
-                    passData.PatchCounterSets = PatchList.CounterSets;
+                    passData.PatchIrradiances = Patches.Irradiances[0];
+                    passData.PatchGeometries = Patches.Geometries;
+                    passData.PatchStatistics = Patches.Statistics;
+                    passData.PatchCounterSets = Patches.CounterSets;
+                    passData.PunctualLightSamples = PunctualLightSamples;
+                    passData.PunctualLightSampleCount = (uint)PunctualLightSamples.count;
                     passData.World = world;
-                    passData.CellPatchIndices = Grid.CellPatchIndices;
-                    passData.GridTargetPos = Grid.TargetPos;
+                    passData.CellPatchIndices = Volume.CellPatchIndices;
+                    passData.VolumeTargetPos = Volume.TargetPos;
                     passData.FrameIdx = frameIdx;
                     passData.AlbedoBoost = _albedoBoost;
-                    passData.GridSize = Grid.GridSize;
-                    passData.CascadeOffsets = Grid.CascadeOffsetBuffer;
-                    passData.CascadeCount = Grid.CascadeCount;
+                    passData.VolumeSpatialResolution = Volume.SpatialResolution;
+                    passData.CascadeOffsets = Volume.CascadeOffsetBuffer;
+                    passData.CascadeCount = Volume.CascadeCount;
                     passData.MultiBounce = _estimationParams.MultiBounce;
                     passData.ShortHysteresis = _shortHysteresis;
                     passData.RingConfigOffset = RingConfig.OffsetA;
                     passData.SampleCount = _estimationParams.UniformEstimationSampleCount;
-                    passData.VoxelMinSize = Grid.VoxelMinSize;
+                    passData.VolumeVoxelMinSize = Volume.VoxelMinSize;
 
-                    RayTracingHelper.ResizeScratchBufferForTrace(passData.Shader, passData.PatchCapacity, 1, 1, ref _traceScratch);
+                    RayTracingHelper.ResizeScratchBufferForTrace(passData.EstimationShader, passData.PatchCapacity, 1, 1, ref _traceScratch);
+                    RayTracingHelper.ResizeScratchBufferForTrace(passData.PunctualLightSamplingShader, passData.PunctualLightSampleCount, 1, 1, ref _traceScratch);
                     passData.TraceScratchBuffer = _traceScratch;
-                    passData.EnvironmentCubemapResolution = _environmentCubemapResolution;
 
                     builder.AllowGlobalStateModification(true); // Set to ensure ordering.
                     builder.SetRenderFunc((UniformEstimationPassData data, UnsafeGraphContext cgContext) => UniformEstimate(data, cgContext));
@@ -777,26 +797,25 @@ namespace UnityEngine.Rendering
             {
                 using (var builder = renderGraph.AddUnsafePass("Surface Cache Restir Candidate + Temporal", out RestirCandidateTemporalPassData passData))
                 {
-                    passData.PatchCapacity = PatchList.Capacity;
+                    passData.PatchCapacity = Patches.Capacity;
                     passData.Shader = _resources.RestirCandidateTemporalShader;
                     passData.RingConfigBuffer = RingConfig.Buffer;
-                    passData.PatchIrradiances = PatchList.Irradiances[0];
-                    passData.PatchGeometries = PatchList.Geometries;
-                    passData.PatchRealizations = PatchList.RestirRealizations[0];
-                    passData.CascadeOffsets = Grid.CascadeOffsetBuffer;
+                    passData.PatchIrradiances = Patches.Irradiances[0];
+                    passData.PatchGeometries = Patches.Geometries;
+                    passData.PatchRealizations = Patches.RestirRealizations[0];
+                    passData.CascadeOffsets = Volume.CascadeOffsetBuffer;
                     passData.World = world;
                     passData.AlbedoBoost = _albedoBoost;
-                    passData.CellPatchIndices = Grid.CellPatchIndices;
-                    passData.GridTargetPos = Grid.TargetPos;
+                    passData.CellPatchIndices = Volume.CellPatchIndices;
+                    passData.VolumeTargetPos = Volume.TargetPos;
                     passData.FrameIdx = frameIdx;
-                    passData.GridSize = Grid.GridSize;
+                    passData.VolumeSpatialResolution = Volume.SpatialResolution;
                     passData.RingConfigOffset = RingConfig.OffsetA;
-                    passData.CascadeCount = Grid.CascadeCount;
+                    passData.CascadeCount = Volume.CascadeCount;
                     passData.MultiBounce = _estimationParams.MultiBounce;
                     passData.ConfidenceCap = _estimationParams.RestirEstimationConfidenceCap;
-                    passData.VoxelMinSize = Grid.VoxelMinSize;
+                    passData.VolumeVoxelMinSize = Volume.VoxelMinSize;
                     passData.ValidationFrameInterval = _estimationParams.RestirEstimationValidationFrameInterval;
-                    passData.EnvironmentCubemapResolution = _environmentCubemapResolution;
 
                     RayTracingHelper.ResizeScratchBufferForTrace(passData.Shader, passData.PatchCapacity, 1, 1, ref _traceScratch);
                     passData.TraceScratchBuffer = _traceScratch;
@@ -812,19 +831,19 @@ namespace UnityEngine.Rendering
                     passData.ThreadGroupSize = _resources.RestirSpatialKernelGroupSize;
                     passData.RingConfigBuffer = RingConfig.Buffer;
                     passData.RingConfigOffset = RingConfig.OffsetA;
-                    passData.PatchGeometries = PatchList.Geometries;
-                    passData.CellPatchIndices = Grid.CellPatchIndices;
-                    passData.CascadeOffsets = Grid.CascadeOffsetBuffer;
-                    passData.InputPatchRealizations = PatchList.RestirRealizations[0];
-                    passData.OutputPatchRealizations = PatchList.RestirRealizations[1];
-                    passData.PatchCapacity = PatchList.Capacity;
+                    passData.PatchGeometries = Patches.Geometries;
+                    passData.CellPatchIndices = Volume.CellPatchIndices;
+                    passData.CascadeOffsets = Volume.CascadeOffsetBuffer;
+                    passData.InputPatchRealizations = Patches.RestirRealizations[0];
+                    passData.OutputPatchRealizations = Patches.RestirRealizations[1];
+                    passData.PatchCapacity = Patches.Capacity;
                     passData.FrameIdx = frameIdx;
-                    passData.VoxelMinSize = Grid.VoxelMinSize;
-                    passData.GridSize = Grid.GridSize;
-                    passData.CascadeCount = Grid.CascadeCount;
+                    passData.VolumeVoxelMinSize = Volume.VoxelMinSize;
+                    passData.VolumeSpatialResolution = Volume.SpatialResolution;
+                    passData.CascadeCount = Volume.CascadeCount;
                     passData.SampleCount = _estimationParams.RestirEstimationSpatialSampleCount;
                     passData.FilterSize = _estimationParams.RestirEstimationSpatialFilterSize;
-                    passData.GridTargetPos = Grid.TargetPos;
+                    passData.VolumeTargetPos = Volume.TargetPos;
 
                     builder.AllowGlobalStateModification(true); // Set to ensure ordering.
                     builder.SetRenderFunc((RestirSpatialPassData data, ComputeGraphContext cgContext) => RestirResampleSpatially(data, cgContext));
@@ -835,15 +854,15 @@ namespace UnityEngine.Rendering
                     passData.KernelIndex = _resources.RestirEstimationKernel;
                     passData.ThreadGroupSize = _resources.RestirEstimationKernelGroupSize;
                     passData.RingConfigBuffer = RingConfig.Buffer;
-                    passData.PatchGeometries = PatchList.Geometries;
-                    passData.PatchRealizations = PatchList.RestirRealizations[1];
-                    passData.PatchCounterSets = PatchList.CounterSets;
-                    passData.PatchIrradiances = PatchList.Irradiances[0];
-                    passData.PatchStatistics = PatchList.Statistics;
+                    passData.PatchGeometries = Patches.Geometries;
+                    passData.PatchRealizations = Patches.RestirRealizations[1];
+                    passData.PatchCounterSets = Patches.CounterSets;
+                    passData.PatchIrradiances = Patches.Irradiances[0];
+                    passData.PatchStatistics = Patches.Statistics;
                     passData.RingConfigOffset = RingConfig.OffsetA;
                     passData.ShortHysteresis = _shortHysteresis;
                     passData.Shader = _resources.RestirEstimationShader;
-                    passData.PatchCapacity = PatchList.Capacity;
+                    passData.PatchCapacity = Patches.Capacity;
 
                     builder.AllowGlobalStateModification(true); // Set to ensure ordering.
                     builder.SetRenderFunc((RestirEstimationPassData data, ComputeGraphContext cgContext) => RestirEstimate(data, cgContext));
@@ -853,29 +872,28 @@ namespace UnityEngine.Rendering
             {
                 using (var builder = renderGraph.AddUnsafePass("Surface Cache RIS Estimation", out RisEstimationPassData passData))
                 {
-                    passData.PatchCapacity = PatchList.Capacity;
+                    passData.PatchCapacity = Patches.Capacity;
                     passData.Shader = _resources.RisEstimationShader;
                     passData.RingConfigBuffer = RingConfig.Buffer;
-                    passData.PatchIrradiances = PatchList.Irradiances[0];
-                    passData.PatchStatistics = PatchList.Statistics;
-                    passData.PatchGeometries = PatchList.Geometries;
-                    passData.PatchCounterSets = PatchList.CounterSets;
-                    passData.CascadeOffsets = Grid.CascadeOffsetBuffer;
+                    passData.PatchIrradiances = Patches.Irradiances[0];
+                    passData.PatchStatistics = Patches.Statistics;
+                    passData.PatchGeometries = Patches.Geometries;
+                    passData.PatchCounterSets = Patches.CounterSets;
+                    passData.CascadeOffsets = Volume.CascadeOffsetBuffer;
                     passData.World = world;
                     passData.AlbedoBoost = _albedoBoost;
-                    passData.CellPatchIndices = Grid.CellPatchIndices;
+                    passData.CellPatchIndices = Volume.CellPatchIndices;
                     passData.FrameIdx = frameIdx;
-                    passData.GridSize = Grid.GridSize;
-                    passData.CascadeCount = Grid.CascadeCount;
+                    passData.VolumeSpatialResolution = Volume.SpatialResolution;
+                    passData.CascadeCount = Volume.CascadeCount;
                     passData.MultiBounce = _estimationParams.MultiBounce;
                     passData.CandidateCount = _estimationParams.RisEstimationCandidateCount;
                     passData.RingConfigOffset = RingConfig.OffsetA;
                     passData.ShortHysteresis = _shortHysteresis;
-                    passData.GridTargetPos = Grid.TargetPos;
+                    passData.VolumeTargetPos = Volume.TargetPos;
                     passData.TargetFunctionUpdateWeight = _estimationParams.RisEstimationTargetFunctionUpdateWeight;
-                    passData.VoxelMinSize = Grid.VoxelMinSize;
-                    passData.PatchAccumulatedLuminances = PatchList.RisAccumulatedLuminances;
-                    passData.EnvironmentCubemapResolution = _environmentCubemapResolution;
+                    passData.VolumeVoxelMinSize = Volume.VoxelMinSize;
+                    passData.PatchAccumulatedLuminances = Patches.RisAccumulatedLuminances;
 
                     RayTracingHelper.ResizeScratchBufferForTrace(passData.Shader, passData.PatchCapacity, 1, 1, ref _traceScratch);
                     passData.TraceScratchBuffer = _traceScratch;
@@ -893,19 +911,19 @@ namespace UnityEngine.Rendering
         private void RecordScrolling(RenderGraph renderGraph)
         {
             bool cascadesChanged = false;
-            Span<int3> oldCascadeOffsets = stackalloc int3[(int)Grid.CascadeCount];
+            Span<int3> oldCascadeOffsets = stackalloc int3[(int)Volume.CascadeCount];
 
-            for (int cascadeIdx = 0; cascadeIdx < Grid.CascadeCount; ++cascadeIdx)
+            for (int cascadeIdx = 0; cascadeIdx < Volume.CascadeCount; ++cascadeIdx)
             {
-                var camPosGridSpace = _grid.TargetPos / (Grid.VoxelMinSize * (1 << cascadeIdx));
+                var camPosVolumeSpace = _volume.TargetPos / (Volume.VoxelMinSize * (1 << cascadeIdx));
                 var newOffset = new int3(
-                    (int)Math.Round(camPosGridSpace.x, MidpointRounding.AwayFromZero),
-                    (int)Math.Round(camPosGridSpace.y, MidpointRounding.AwayFromZero),
-                    (int)Math.Round(camPosGridSpace.z, MidpointRounding.AwayFromZero));
-                var oldOffset = Grid.CascadeOffsets[cascadeIdx];
+                    (int)Math.Round(camPosVolumeSpace.x, MidpointRounding.AwayFromZero),
+                    (int)Math.Round(camPosVolumeSpace.y, MidpointRounding.AwayFromZero),
+                    (int)Math.Round(camPosVolumeSpace.z, MidpointRounding.AwayFromZero));
+                var oldOffset = Volume.CascadeOffsets[cascadeIdx];
                 oldCascadeOffsets[cascadeIdx] = oldOffset;
                 cascadesChanged = cascadesChanged || math.any(newOffset != oldOffset);
-                Grid.CascadeOffsets[cascadeIdx] = newOffset;
+                Volume.CascadeOffsets[cascadeIdx] = newOffset;
             }
 
             if (cascadesChanged)
@@ -915,14 +933,14 @@ namespace UnityEngine.Rendering
                     passData.Shader = _resources.ScrollingShader;
                     passData.KernelIndex = _resources.ScrollingKernel;
                     passData.ThreadGroupSize = _resources.ScrollingKernelGroupSize;
-                    passData.CellAllocationMarks = Grid.CellAllocationMarks;
-                    passData.CellPatchIndices = Grid.CellPatchIndices;
-                    passData.PatchCellIndices = PatchList.CellIndices;
-                    passData.GridSize = Grid.GridSize;
-                    passData.NewCascadeOffsetsDevice = Grid.CascadeOffsetBuffer;
-                    passData.NewCascadeOffsetsHost = Grid.CascadeOffsets;
+                    passData.CellAllocationMarks = Volume.CellAllocationMarks;
+                    passData.CellPatchIndices = Volume.CellPatchIndices;
+                    passData.PatchCellIndices = Patches.CellIndices;
+                    passData.VolumeSpatialResolution = Volume.SpatialResolution;
+                    passData.NewCascadeOffsetsDevice = Volume.CascadeOffsetBuffer;
+                    passData.NewCascadeOffsetsHost = Volume.CascadeOffsets;
                     passData.OldCascadeOffsetsHost = oldCascadeOffsets.ToArray();
-                    passData.CascadeCount = Grid.CascadeCount;
+                    passData.CascadeCount = Volume.CascadeCount;
 
                     builder.AllowGlobalStateModification(true); // Set to ensure ordering.
                     builder.SetRenderFunc((ScrollingPassData data, ComputeGraphContext cgContext) => Scroll(data, cgContext));
@@ -932,40 +950,64 @@ namespace UnityEngine.Rendering
 
         static void UniformEstimate(UniformEstimationPassData data, UnsafeGraphContext graphCtx)
         {
-            var shader = data.Shader;
             var cmd = CommandBufferHelpers.GetNativeCommandBuffer(graphCtx.cmd);
+            var spotLightBuffer = data.World.GetSpotLightBuffer();
+            var spotLightCount = (int)data.World.GetSpotLightCount();
 
-            shader.SetBufferParam(cmd, ShaderIDs._RingConfigBuffer, data.RingConfigBuffer);
-            shader.SetBufferParam(cmd, ShaderIDs._PatchIrradiances, data.PatchIrradiances);
-            shader.SetBufferParam(cmd, ShaderIDs._PatchGeometries, data.PatchGeometries);
-            shader.SetBufferParam(cmd, ShaderIDs._PatchStatistics, data.PatchStatistics);
-            shader.SetBufferParam(cmd, ShaderIDs._PatchCounterSets, data.PatchCounterSets);
-            shader.SetBufferParam(cmd, ShaderIDs._CascadeOffsets, data.CascadeOffsets);
-            shader.SetIntParam(cmd, ShaderIDs._FrameIdx, (int)data.FrameIdx);
-            shader.SetIntParam(cmd, ShaderIDs._GridSize, (int)data.GridSize);
-            shader.SetIntParam(cmd, ShaderIDs._CascadeCount, (int)data.CascadeCount);
-            shader.SetIntParam(cmd, ShaderIDs._SampleCount, (int)data.SampleCount);
-            shader.SetIntParam(cmd, ShaderIDs._MultiBounce, data.MultiBounce ? 1 : 0);
-            shader.SetFloatParam(cmd, ShaderIDs._VoxelMinSize, data.VoxelMinSize);
-            shader.SetFloatParam(cmd, ShaderIDs._ShortHysteresis, data.ShortHysteresis);
-            shader.SetIntParam(cmd, ShaderIDs._RingConfigOffset, (int)data.RingConfigOffset);
-            shader.SetBufferParam(cmd, ShaderIDs._CellPatchIndices, data.CellPatchIndices);
-            shader.SetVectorParam(cmd, ShaderIDs._GridTargetPos, data.GridTargetPos);
-            shader.SetTextureParam(cmd, ShaderIDs._EnvironmentCubemap, data.World.GetEnvironmentTexture((int)data.EnvironmentCubemapResolution));
-            shader.SetBufferParam(cmd, ShaderIDs._MaterialEntries, data.World.GetMaterialListBuffer());
-            shader.SetTextureParam(cmd, ShaderIDs._AlbedoTextures, data.World.GetMaterialAlbedoTextures());
-            shader.SetTextureParam(cmd, ShaderIDs._EmissionTextures, data.World.GetMaterialEmissionTextures());
-            shader.SetTextureParam(cmd, ShaderIDs._TransmissionTextures, data.World.GetMaterialTransmissionTextures());
-            shader.SetFloatParam(cmd, ShaderIDs._AlbedoBoost, data.AlbedoBoost);
-            shader.SetFloatParam(cmd, ShaderIDs._MaterialAtlasTexelSize, GetMaterialAtlasTexelSize(data.World.GetMaterialAlbedoTextures()));
+            if (spotLightCount != 0)
+            {
+                var shader = data.PunctualLightSamplingShader;
+                data.World.GetAccelerationStructure().Bind(cmd, "_RayTracingAccelerationStructure", shader);
+                shader.SetBufferParam(cmd, ShaderIDs._SpotLights, spotLightBuffer);
+                shader.SetIntParam(cmd, ShaderIDs._SpotLightCount, spotLightCount);
+                shader.SetFloatParam(cmd, ShaderIDs._FrameIdx, data.FrameIdx);
+                shader.SetBufferParam(cmd, ShaderIDs._Samples, data.PunctualLightSamples);
+                shader.SetBufferParam(cmd, ShaderIDs._MaterialEntries, data.World.GetMaterialListBuffer());
+                shader.SetTextureParam(cmd, ShaderIDs._AlbedoTextures, data.World.GetMaterialAlbedoTextures());
+                shader.SetTextureParam(cmd, ShaderIDs._EmissionTextures, data.World.GetMaterialEmissionTextures());
+                shader.SetTextureParam(cmd, ShaderIDs._TransmissionTextures, data.World.GetMaterialTransmissionTextures());
+                shader.SetFloatParam(cmd, ShaderIDs._AlbedoBoost, data.AlbedoBoost);
+                shader.SetFloatParam(cmd, ShaderIDs._MaterialAtlasTexelSize, GetMaterialAtlasTexelSize(data.World.GetMaterialAlbedoTextures()));
+                shader.Dispatch(cmd, data.TraceScratchBuffer, data.PunctualLightSampleCount, 1, 1);
+            }
 
-            var (dirLightDirection, dirLightIntensity) = GetDirectionalLightUniforms(data.World.GetDirectionalLight());
-            shader.SetVectorParam(cmd, ShaderIDs._DirectionalLightDirection, dirLightDirection);
-            shader.SetVectorParam(cmd, ShaderIDs._DirectionalLightIntensity, dirLightIntensity);
+            {
+                var shader = data.EstimationShader;
+                shader.SetBufferParam(cmd, ShaderIDs._RingConfigBuffer, data.RingConfigBuffer);
+                shader.SetBufferParam(cmd, ShaderIDs._PunctualLightSamples, data.PunctualLightSamples);
+                shader.SetBufferParam(cmd, ShaderIDs._PatchIrradiances, data.PatchIrradiances);
+                shader.SetBufferParam(cmd, ShaderIDs._PatchGeometries, data.PatchGeometries);
+                shader.SetBufferParam(cmd, ShaderIDs._PatchStatistics, data.PatchStatistics);
+                shader.SetBufferParam(cmd, ShaderIDs._PatchCounterSets, data.PatchCounterSets);
+                shader.SetBufferParam(cmd, ShaderIDs._CascadeOffsets, data.CascadeOffsets);
+                shader.SetIntParam(cmd, ShaderIDs._FrameIdx, (int)data.FrameIdx);
+                shader.SetIntParam(cmd, ShaderIDs._VolumeSpatialResolution, (int)data.VolumeSpatialResolution);
+                shader.SetIntParam(cmd, ShaderIDs._CascadeCount, (int)data.CascadeCount);
+                shader.SetIntParam(cmd, ShaderIDs._SampleCount, (int)data.SampleCount);
+                shader.SetIntParam(cmd, ShaderIDs._MultiBounce, data.MultiBounce ? 1 : 0);
+                shader.SetFloatParam(cmd, ShaderIDs._VolumeVoxelMinSize, data.VolumeVoxelMinSize);
+                shader.SetFloatParam(cmd, ShaderIDs._PunctualLightSampleCount, data.PunctualLightSampleCount);
+                shader.SetFloatParam(cmd, ShaderIDs._ShortHysteresis, data.ShortHysteresis);
+                shader.SetIntParam(cmd, ShaderIDs._RingConfigOffset, (int)data.RingConfigOffset);
+                shader.SetBufferParam(cmd, ShaderIDs._CellPatchIndices, data.CellPatchIndices);
+                shader.SetVectorParam(cmd, ShaderIDs._VolumeTargetPos, data.VolumeTargetPos);
+                shader.SetTextureParam(cmd, ShaderIDs._EnvironmentCubemap, data.World.GetEnvironmentTexture());
+                shader.SetBufferParam(cmd, ShaderIDs._MaterialEntries, data.World.GetMaterialListBuffer());
+                shader.SetTextureParam(cmd, ShaderIDs._AlbedoTextures, data.World.GetMaterialAlbedoTextures());
+                shader.SetTextureParam(cmd, ShaderIDs._EmissionTextures, data.World.GetMaterialEmissionTextures());
+                shader.SetTextureParam(cmd, ShaderIDs._TransmissionTextures, data.World.GetMaterialTransmissionTextures());
+                shader.SetFloatParam(cmd, ShaderIDs._AlbedoBoost, data.AlbedoBoost);
+                shader.SetFloatParam(cmd, ShaderIDs._MaterialAtlasTexelSize, GetMaterialAtlasTexelSize(data.World.GetMaterialAlbedoTextures()));
+                shader.SetIntParam(cmd, ShaderIDs._SpotLightCount, spotLightCount);
 
-            data.World.GetAccelerationStructure().Bind(cmd, "_RayTracingAccelerationStructure", data.Shader);
+                var (dirLightDirection, dirLightIntensity) = GetDirectionalLightUniforms(data.World.GetDirectionalLight());
+                shader.SetVectorParam(cmd, ShaderIDs._DirectionalLightDirection, dirLightDirection);
+                shader.SetVectorParam(cmd, ShaderIDs._DirectionalLightIntensity, dirLightIntensity);
 
-            shader.Dispatch(cmd, data.TraceScratchBuffer, data.PatchCapacity, 1, 1);
+                data.World.GetAccelerationStructure().Bind(cmd, "_RayTracingAccelerationStructure", shader);
+
+                shader.Dispatch(cmd, data.TraceScratchBuffer, data.PatchCapacity, 1, 1);
+            }
         }
 
         static (Vector3, Vector3) GetDirectionalLightUniforms(SurfaceCacheWorld.DirectionalLight? dirLight)
@@ -987,16 +1029,16 @@ namespace UnityEngine.Rendering
             shader.SetBufferParam(cmd, ShaderIDs._PatchRealizations, data.PatchRealizations);
             shader.SetBufferParam(cmd, ShaderIDs._CascadeOffsets, data.CascadeOffsets);
             shader.SetIntParam(cmd, ShaderIDs._FrameIdx, (int)data.FrameIdx);
-            shader.SetIntParam(cmd, ShaderIDs._GridSize, (int)data.GridSize);
+            shader.SetIntParam(cmd, ShaderIDs._VolumeSpatialResolution, (int)data.VolumeSpatialResolution);
             shader.SetIntParam(cmd, ShaderIDs._RingConfigOffset, (int)data.RingConfigOffset);
             shader.SetIntParam(cmd, ShaderIDs._CascadeCount, (int)data.CascadeCount);
-            shader.SetFloatParam(cmd, ShaderIDs._ConfidenceCap, (float)data.ConfidenceCap);
+            shader.SetFloatParam(cmd, ShaderIDs._ConfidenceCap, data.ConfidenceCap);
             shader.SetIntParam(cmd, ShaderIDs._MultiBounce, data.MultiBounce ? 1 : 0);
             shader.SetIntParam(cmd, ShaderIDs._ValidationFrameInterval, (int)data.ValidationFrameInterval);
-            shader.SetFloatParam(cmd, ShaderIDs._VoxelMinSize, data.VoxelMinSize);
+            shader.SetFloatParam(cmd, ShaderIDs._VolumeVoxelMinSize, data.VolumeVoxelMinSize);
             shader.SetBufferParam(cmd, ShaderIDs._CellPatchIndices, data.CellPatchIndices);
-            shader.SetVectorParam(cmd, ShaderIDs._GridTargetPos, data.GridTargetPos);
-            shader.SetTextureParam(cmd, ShaderIDs._EnvironmentCubemap, data.World.GetEnvironmentTexture((int)data.EnvironmentCubemapResolution));
+            shader.SetVectorParam(cmd, ShaderIDs._VolumeTargetPos, data.VolumeTargetPos);
+            shader.SetTextureParam(cmd, ShaderIDs._EnvironmentCubemap, data.World.GetEnvironmentTexture());
             shader.SetBufferParam(cmd, ShaderIDs._MaterialEntries, data.World.GetMaterialListBuffer());
             shader.SetTextureParam(cmd, ShaderIDs._AlbedoTextures, data.World.GetMaterialAlbedoTextures());
             shader.SetTextureParam(cmd, ShaderIDs._EmissionTextures, data.World.GetMaterialEmissionTextures());
@@ -1025,13 +1067,13 @@ namespace UnityEngine.Rendering
             cmd.SetComputeBufferParam(shader, kernelIndex, ShaderIDs._CellPatchIndices, data.CellPatchIndices);
             cmd.SetComputeBufferParam(shader, kernelIndex, ShaderIDs._CascadeOffsets, data.CascadeOffsets);
             cmd.SetComputeIntParam(shader, ShaderIDs._FrameIdx, (int)data.FrameIdx);
-            cmd.SetComputeFloatParam(shader, ShaderIDs._VoxelMinSize, data.VoxelMinSize);
-            cmd.SetComputeIntParam(shader, ShaderIDs._GridSize, (int)data.GridSize);
+            cmd.SetComputeFloatParam(shader, ShaderIDs._VolumeVoxelMinSize, data.VolumeVoxelMinSize);
+            cmd.SetComputeIntParam(shader, ShaderIDs._VolumeSpatialResolution, (int)data.VolumeSpatialResolution);
             cmd.SetComputeIntParam(shader, ShaderIDs._CascadeCount, (int)data.CascadeCount);
             cmd.SetComputeIntParam(shader, ShaderIDs._SampleCount, (int)data.SampleCount);
             cmd.SetComputeIntParam(shader, ShaderIDs._FilterSize, (int)data.FilterSize);
             cmd.SetComputeIntParam(shader, ShaderIDs._RingConfigOffset, (int)data.RingConfigOffset);
-            cmd.SetComputeVectorParam(shader, ShaderIDs._GridTargetPos, data.GridTargetPos);
+            cmd.SetComputeVectorParam(shader, ShaderIDs._VolumeTargetPos, data.VolumeTargetPos);
 
             uint3 groupCount = DivUp(new uint3(data.PatchCapacity, 1, 1), data.ThreadGroupSize);
             cmd.DispatchCompute(data.Shader, data.KernelIndex, (int)groupCount.x, (int)groupCount.y, 1);
@@ -1067,18 +1109,18 @@ namespace UnityEngine.Rendering
             shader.SetBufferParam(cmd, ShaderIDs._PatchCounterSets, data.PatchCounterSets);
             shader.SetBufferParam(cmd, ShaderIDs._CascadeOffsets, data.CascadeOffsets);
             shader.SetIntParam(cmd, ShaderIDs._FrameIdx, (int)data.FrameIdx);
-            shader.SetIntParam(cmd, ShaderIDs._GridSize, (int)data.GridSize);
+            shader.SetIntParam(cmd, ShaderIDs._VolumeSpatialResolution, (int)data.VolumeSpatialResolution);
             shader.SetIntParam(cmd, ShaderIDs._CascadeCount, (int)data.CascadeCount);
             shader.SetIntParam(cmd, ShaderIDs._CandidateCount, (int)data.CandidateCount);
             shader.SetFloatParam(cmd, ShaderIDs._TargetFunctionUpdateWeight, data.TargetFunctionUpdateWeight);
             shader.SetIntParam(cmd, ShaderIDs._MultiBounce, data.MultiBounce ? 1 : 0);
-            shader.SetFloatParam(cmd, ShaderIDs._VoxelMinSize, data.VoxelMinSize);
+            shader.SetFloatParam(cmd, ShaderIDs._VolumeVoxelMinSize, data.VolumeVoxelMinSize);
             shader.SetBufferParam(cmd, ShaderIDs._CellPatchIndices, data.CellPatchIndices);
             shader.SetBufferParam(cmd, ShaderIDs._PatchAccumulatedLuminances, data.PatchAccumulatedLuminances);
             shader.SetIntParam(cmd, ShaderIDs._RingConfigOffset, (int)data.RingConfigOffset);
             shader.SetFloatParam(cmd, ShaderIDs._ShortHysteresis, data.ShortHysteresis);
-            shader.SetVectorParam(cmd, ShaderIDs._GridTargetPos, data.GridTargetPos);
-            shader.SetTextureParam(cmd, ShaderIDs._EnvironmentCubemap, data.World.GetEnvironmentTexture((int)data.EnvironmentCubemapResolution));
+            shader.SetVectorParam(cmd, ShaderIDs._VolumeTargetPos, data.VolumeTargetPos);
+            shader.SetTextureParam(cmd, ShaderIDs._EnvironmentCubemap, data.World.GetEnvironmentTexture());
             shader.SetBufferParam(cmd, ShaderIDs._MaterialEntries, data.World.GetMaterialListBuffer());
             shader.SetTextureParam(cmd, ShaderIDs._AlbedoTextures, data.World.GetMaterialAlbedoTextures());
             shader.SetTextureParam(cmd, ShaderIDs._EmissionTextures, data.World.GetMaterialEmissionTextures());
@@ -1145,12 +1187,12 @@ namespace UnityEngine.Rendering
             cmd.SetComputeBufferParam(shader, kernelIndex, ShaderIDs._CascadeOffsets, data.CascadeOffsets);
             cmd.SetComputeIntParam(shader, ShaderIDs._FrameIdx, (int)data.FrameIdx);
             cmd.SetComputeIntParam(shader, ShaderIDs._CascadeCount, (int)data.CascadeCount);
-            cmd.SetComputeIntParam(shader, ShaderIDs._GridSize, (int)data.GridSize);
-            cmd.SetComputeFloatParam(shader, ShaderIDs._VoxelMinSize, data.VoxelMinSize);
+            cmd.SetComputeIntParam(shader, ShaderIDs._VolumeSpatialResolution, (int)data.VolumeSpatialResolution);
+            cmd.SetComputeFloatParam(shader, ShaderIDs._VolumeVoxelMinSize, data.VolumeVoxelMinSize);
             cmd.SetComputeIntParam(shader, ShaderIDs._SampleCount, (int)data.SampleCount);
             cmd.SetComputeFloatParam(shader, ShaderIDs._Radius, data.Radius);
             cmd.SetComputeIntParam(shader, ShaderIDs._RingConfigOffset, (int)data.RingConfigOffset);
-            cmd.SetComputeVectorParam(shader, ShaderIDs._GridTargetPos, data.GridTargetPos);
+            cmd.SetComputeVectorParam(shader, ShaderIDs._VolumeTargetPos, data.VolumeTargetPos);
 
             uint3 groupCount = DivUp(new uint3(data.PatchCapacity, 1, 1), data.ThreadGroupSize);
             cmd.DispatchCompute(shader, kernelIndex, (int)groupCount.x, (int)groupCount.y, 1);
@@ -1175,9 +1217,10 @@ namespace UnityEngine.Rendering
 
         public void Dispose()
         {
-            _grid.Dispose();
+            _volume.Dispose();
             _ringConfig.Dispose();
-            _patchList.Dispose();
+            _patches.Dispose();
+            _punctualLightSamples.Dispose();
             _traceScratch?.Dispose();
         }
 
@@ -1194,7 +1237,7 @@ namespace UnityEngine.Rendering
             cmd.SetComputeBufferParam(data.Shader, data.KernelIndex, ShaderIDs._CellPatchIndices, data.CellPatchIndices);
             cmd.SetComputeBufferParam(data.Shader, data.KernelIndex, ShaderIDs._NewCascadeOffsets, data.NewCascadeOffsetsDevice);
             cmd.SetComputeBufferParam(data.Shader, data.KernelIndex, ShaderIDs._PatchCellIndices, data.PatchCellIndices);
-            cmd.SetComputeIntParam(data.Shader, ShaderIDs._GridSize, (int)data.GridSize);
+            cmd.SetComputeIntParam(data.Shader, ShaderIDs._VolumeSpatialResolution, (int)data.VolumeSpatialResolution);
             cmd.SetComputeIntParam(data.Shader, ShaderIDs._CascadeCount, (int)data.CascadeCount);
 
             {
@@ -1209,7 +1252,7 @@ namespace UnityEngine.Rendering
                 cmd.SetComputeIntParams(data.Shader, ShaderIDs._OldCascadeOffsets, oldCascadeOffsetsInts);
             }
 
-            uint3 groupCount = DivUp(new uint3(data.GridSize, data.GridSize, data.GridSize * data.CascadeCount), data.ThreadGroupSize);
+            uint3 groupCount = DivUp(new uint3(data.VolumeSpatialResolution, data.VolumeSpatialResolution, data.VolumeSpatialResolution * data.CascadeCount), data.ThreadGroupSize);
             cmd.DispatchCompute(data.Shader, data.KernelIndex, (int)groupCount.x, (int)groupCount.y, (int)groupCount.z);
         }
 

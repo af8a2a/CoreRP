@@ -12,7 +12,6 @@ namespace UnityEditor.Rendering
     {
         static readonly string[] k_PassTypeNames =
         {
-            "Legacy Render Pass",
             "Unsafe Render Pass",
             "Raster Render Pass",
             "Compute Pass"
@@ -20,7 +19,6 @@ namespace UnityEditor.Rendering
 
         static readonly string[] k_PassTypeNamesNotMergedMessage =
         {
-            "This is a Legacy Render Pass. Only Raster Render Passes can be merged.",
             "This is an Unsafe Render Pass. Only Raster Render Passes can be merged.",
             "Pass merging was disabled.",
             "This is a Compute Pass. Only Raster Render Passes can be merged."
@@ -68,11 +66,7 @@ namespace UnityEditor.Rendering
             rootVisualElement.RegisterCallback<GeometryChangedEvent>(_ =>
             {
                 SaveSplitViewFixedPaneHeight(); // Window resized - save the current pane height
-
-                // TwoPaneSplitView also updates draglineanchor offset using the same event, conflicting with what we
-                // do here. Deferring our panel height update to next frame solves a bug with dragline "jumping" when
-                // window is resized down vertically and the lower panel is already at minimum height.
-                rootVisualElement.schedule.Execute(UpdatePanelHeights);
+                UpdatePanelHeights();
             });
 
             var contentSplitView = rootVisualElement.Q<TwoPaneSplitView>(Names.kContentContainer);
@@ -296,8 +290,7 @@ namespace UnityEditor.Rendering
                     resourceItem.Add(new Label($"Clear: {resourceData.textureData.clearBuffer}"));
                     resourceItem.Add(new Label($"BindMS: {resourceData.textureData.bindMS}"));
                     resourceItem.Add(new Label($"Samples: {resourceData.textureData.samples}"));
-                    if (m_CurrentDebugData.isNRPCompiler)
-                        resourceItem.Add(new Label($"Memoryless: {resourceData.memoryless}"));
+                    resourceItem.Add(new Label($"Memoryless: {resourceData.memoryless}"));
                 }
                 else if (type == RenderGraphResourceType.Buffer && resourceData.bufferData != null)
                 {
@@ -319,11 +312,6 @@ namespace UnityEditor.Rendering
         void PopulatePassList()
         {
             HeaderFoldout headerFoldout = rootVisualElement.Q<HeaderFoldout>(Names.kPassListFoldout);
-            if (!m_CurrentDebugData.isNRPCompiler)
-            {
-                headerFoldout.style.display = DisplayStyle.None;
-                return;
-            }
             headerFoldout.style.display = DisplayStyle.Flex;
 
             ScrollView content = headerFoldout.Q<ScrollView>();
@@ -505,7 +493,7 @@ namespace UnityEditor.Rendering
 
         void UpdatePanelHeights()
         {
-            bool passListExpanded = m_PassListExpanded && HasValidDebugData && m_CurrentDebugData.isNRPCompiler;
+            bool passListExpanded = m_PassListExpanded && HasValidDebugData;
             const int kFoldoutHeaderHeightPx = 18;
             const int kFoldoutHeaderExpandedMinHeightPx = 50;
             const int kWindowExtraMarginPx = 6;

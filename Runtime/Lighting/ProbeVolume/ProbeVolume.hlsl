@@ -77,7 +77,13 @@ struct APVResources
 
 struct APVResourcesRW
 {
+#ifdef SHADER_API_METAL
+    // We need to use float4 on Metal, since HLSLcc will generate invalid MSL otherwise.
+    // See https://jira.unity3d.com/browse/UUM-127198
+    RWTexture3D<float4> L0_L1Rx;
+#else
     RWTexture3D<half4> L0_L1Rx;
+#endif
     RWTexture3D<unorm float4> L1G_L1Ry;
     RWTexture3D<unorm float4> L1B_L1Rz;
     RWTexture3D<unorm float4> L2_0;
@@ -897,6 +903,21 @@ void EvaluateAdaptiveProbeVolume(in float3 posWS, in float3 normalWS, in float3 
 #else
     probeOcclusion = 1;
 #endif
+
+    EvaluateAdaptiveProbeVolume(apvSample, normalWS, bakeDiffuseLighting);
+}
+
+void EvaluateAdaptiveProbeVolume(in float3 posWS, in float3 normalWS, in float3 viewDir, in uint renderingLayer,
+    out float3 bakeDiffuseLighting, out float4 probeOcclusion)
+{
+    bakeDiffuseLighting = float3(0.0, 0.0, 0.0);
+
+    APVSample apvSample = SampleAPV(posWS, normalWS, renderingLayer, viewDir);
+    #ifdef USE_APV_PROBE_OCCLUSION
+    probeOcclusion = apvSample.probeOcclusion;
+    #else
+    probeOcclusion = 1;
+    #endif
 
     EvaluateAdaptiveProbeVolume(apvSample, normalWS, bakeDiffuseLighting);
 }
