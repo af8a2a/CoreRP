@@ -11,3 +11,4 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("Unity.RenderPipelines.Core.Editor")]
 [assembly: InternalsVisibleTo("Unity.SurfaceCache.Runtime")]
 [assembly: InternalsVisibleTo("Assembly-CSharp-testable")]
+[assembly: InternalsVisibleTo("UnityEngine.Rendering.Universal.SurfaceCache")]
