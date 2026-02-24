@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Unity.Collections;
 using UnityEditor;
@@ -10,7 +12,7 @@ namespace UnityEngine.Rendering
     partial class AdaptiveProbeVolumes
     {
         /// <summary>
-        /// Virtual offset baker
+        /// Virtual offset baker. This API allows implementing custom virtual offset baking strategies. Virtual offsets are used to offset probe positions away from geometry to avoid light leaking.
         /// </summary>
         public abstract class VirtualOffsetBaker : IDisposable
         {
@@ -149,7 +151,7 @@ namespace UnityEngine.Rendering
                     Span<bool> perSubMeshOpaqueness = stackalloc bool[subMeshCount];
                     perSubMeshOpaqueness.Fill(true);
 
-                    accelStruct.AddInstance(renderer.component.GetEntityId().GetRawData(), renderer.component, maskAndMatDummy, maskAndMatDummy, perSubMeshOpaqueness, 1);
+                    accelStruct.AddInstance(EntityId.ToULong(renderer.component.GetEntityId()), renderer.component, maskAndMatDummy, maskAndMatDummy, perSubMeshOpaqueness, 1);
                 }
 
                 foreach (var terrain in contributors.terrains)
@@ -158,7 +160,7 @@ namespace UnityEngine.Rendering
                     if ((layerMask & mask) == 0)
                         continue;
 
-                    accelStruct.AddInstance(terrain.component.GetEntityId().GetRawData(), terrain.component, new uint[1] { 0xFFFFFFFF }, new uint[1] { 0xFFFFFFFF }, new bool[1] { true }, 1);
+                    accelStruct.AddInstance(EntityId.ToULong(terrain.component.GetEntityId()), terrain.component, new uint[1] { 0xFFFFFFFF }, new uint[1] { 0xFFFFFFFF }, new bool[1] { true }, 1);
                 }
 
                 return accelStruct;
@@ -480,12 +482,41 @@ namespace UnityEngine.Rendering
             for (int i = 0; i < matIndices.Length; ++i)
             {
                 if (i < renderer.sharedMaterials.Length && renderer.sharedMaterials[i] != null)
-                    matIndices[i] = (uint)renderer.sharedMaterials[i].GetEntityId().GetRawData();
+                    matIndices[i] = (uint)EntityId.ToULong(renderer.sharedMaterials[i].GetEntityId());
                 else
                     matIndices[i] = 0;
             }
 
             return matIndices;
+        }
+    }
+
+    // This class is used to access the internal class UnityEditor.LightBaking.VirtualOffsets.
+    class VirtualOffsets : IDisposable
+    {
+        readonly object m_VirtualOffsets;
+        readonly Type m_VirtualOffsetsType;
+
+        public VirtualOffsets(IntPtr ptr)
+        {
+            m_VirtualOffsetsType = Type.GetType("UnityEditor.LightBaking.VirtualOffsets, UnityEditor");
+            bool newed = m_VirtualOffsetsType != null;
+            Debug.Assert(newed, "Unexpected, could not find the type UnityEditor.LightBaking.VirtualOffsets");
+            m_VirtualOffsets = newed ? Activator.CreateInstance(m_VirtualOffsetsType, ptr) : null;
+            Debug.Assert(m_VirtualOffsets != null, "Unexpected, could not new up a VirtualOffsets");
+        }
+        internal void SetVirtualOffsets(Vector3[] offsets) =>
+            InvokeMethod(new object[] { offsets }, out _);
+
+        public void Dispose() =>
+            InvokeMethod(new object[] { }, out _);
+
+        void InvokeMethod(object[] parameters, out object result, [CallerMemberName] string methodName = "")
+        {
+            MethodInfo methodInfo = m_VirtualOffsetsType.GetMethod(methodName, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+            bool gotMethod = methodInfo != null;
+            Debug.Assert(gotMethod, $"Unexpected, could not find {methodName} on VirtualOffsets");
+            result = !gotMethod ? null : methodInfo.Invoke(m_VirtualOffsets, parameters);
         }
     }
 }

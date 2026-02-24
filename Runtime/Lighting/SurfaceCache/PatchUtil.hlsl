@@ -38,15 +38,16 @@ namespace PatchUtil
         float3 normal;
     };
 
+    struct PatchCounterSet
+    {
+        uint data;
+    };
+
     struct PatchStatisticsSet
     {
         float3 mean;
         float3 variance;
-    };
-
-    struct PatchCounterSet
-    {
-        uint data;
+        PatchCounterSet patchCounters;
     };
 
     void Reset(inout PatchCounterSet set)
@@ -79,11 +80,11 @@ namespace PatchUtil
         return a.data == b.data;
     }
 
-    void WriteLastFrameAccess(RWStructuredBuffer<PatchUtil::PatchCounterSet> counterSets, uint patchIdx, uint frameIdx)
+    void WriteLastFrameAccess(RWStructuredBuffer<PatchUtil::PatchStatisticsSet> statisticsSets, uint patchIdx, uint frameIdx)
     {
-        PatchCounterSet counterSet = counterSets[patchIdx];
+        PatchCounterSet counterSet = statisticsSets[patchIdx].patchCounters;
         SetLastAccessFrame(counterSet, frameIdx);
-        counterSets[patchIdx] = counterSet;
+        statisticsSets[patchIdx].patchCounters = counterSet;
     }
 
     float GetVoxelSize(float voxelMinSize, uint cascadeIdx)
@@ -99,7 +100,7 @@ namespace PatchUtil
     float2 SphereToSquare(float3 n)
     {
         n /= (abs(n.x) + abs(n.y) + abs(n.z));
-        n.xy = n.z >= 0.0 ? n.xy : OctWrap(n.xy);
+        n.xy = VECTOR_LOGIC_SELECT(n.z >= 0.0, n.xy, OctWrap(n.xy));
         n.xy = n.xy * 0.5 + 0.5;
         return n.xy;
     }
@@ -151,7 +152,7 @@ namespace PatchUtil
     uint3 SignedIntegerModulo(int3 x, uint modulus)
     {
         const uint3 remainder = uint3(abs(x)) % modulus;
-        return VECTOR_LOGIC_SELECT(x < 0 && remainder != 0, modulus - remainder, remainder);
+        return VECTOR_LOGIC_SELECT(VECTOR_LOGIC_AND(x < 0, remainder != 0), modulus - remainder, remainder);
     }
 
     uint3 ConvertVolumeSpaceToStorageSpace(uint3 posVolSpace, uint spatialResolution, int3 cascadeOffset)
@@ -306,12 +307,12 @@ namespace PatchUtil
         }
     }
 
-    uint FindPatchIndexAndUpdateLastAccess(float3 volumeTargetPos, StructuredBuffer<uint> cellPatchIndices, uint spatialResolution, StructuredBuffer<int3> cascadeOffsets, RWStructuredBuffer<PatchUtil::PatchCounterSet> patchCounterSets, uint cascadeCount, float voxelMinSize, float3 worldPosition, float3 worldNormal, uint frameIdx)
+    uint FindPatchIndexAndUpdateLastAccess(float3 volumeTargetPos, StructuredBuffer<uint> cellPatchIndices, uint spatialResolution, StructuredBuffer<int3> cascadeOffsets, RWStructuredBuffer<PatchUtil::PatchStatisticsSet> patchStatisticSets, uint cascadeCount, float voxelMinSize, float3 worldPosition, float3 worldNormal, uint frameIdx)
     {
         const uint patchIdx = FindPatchIndex(volumeTargetPos, cellPatchIndices, spatialResolution, cascadeOffsets, cascadeCount, voxelMinSize,worldPosition, worldNormal);
         if (patchIdx != invalidPatchIndex)
         {
-            WriteLastFrameAccess(patchCounterSets, patchIdx, frameIdx);
+            WriteLastFrameAccess(patchStatisticSets, patchIdx, frameIdx);
         }
         return patchIdx;
     }

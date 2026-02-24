@@ -88,6 +88,23 @@ namespace UnityEngine.Rendering.RenderGraphModule
         }
 
         /// <summary>
+        /// BufferDesc constructor.
+        /// </summary>
+        /// <param name="count">Number of elements in the buffer.</param>
+        /// <param name="stride">Size of one element in the buffer.</param>
+        /// <param name="name">Buffer name.</param>
+        /// <param name="target">Type of the buffer.</param>
+        public BufferDesc(int count, int stride, string name, GraphicsBuffer.Target target = GraphicsBuffer.Target.Structured)
+            : this()
+        {
+            this.count = count;
+            this.stride = stride;
+            this.target = target;
+            this.name = name;
+            this.usageFlags = GraphicsBuffer.UsageFlags.None;
+        }
+
+        /// <summary>
         /// Hash function
         /// </summary>
         /// <returns>The texture descriptor hash.</returns>
@@ -161,9 +178,9 @@ namespace UnityEngine.Rendering.RenderGraphModule
             return "GraphicsBuffer";
         }
 
-        override protected int GetSortIndex(GraphicsBuffer res)
+        override protected ulong GetSortIndex(GraphicsBuffer res)
         {
-            return res.GetHashCode();
+            return (ulong)res.GetHashCode();
         }
     }
 }

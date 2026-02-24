@@ -55,7 +55,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
             public DebugData GetDebugData(string renderGraph, EntityId executionId)
             {
                 if (!m_Container.TryGetValue(renderGraph, out var debugDataForGraph))
-                    throw new InvalidOperationException();
+                    throw new InvalidOperationException($"RenderGraph '{renderGraph}' was never registered with the debug session.");
                 return debugDataForGraph[executionId];
             }
 
@@ -91,6 +91,8 @@ namespace UnityEngine.Rendering.RenderGraphModule
 
         // Session is considered active when it is collecting debug data
         public abstract bool isActive { get; }
+
+        public string connectionName { get; set; }
 
         DebugDataContainer debugDataContainer { get; }
 
@@ -149,6 +151,17 @@ namespace UnityEngine.Rendering.RenderGraphModule
             s_CurrentDebugSession = new TSession();
         }
 
+        // internal: Required in test
+        internal static void Create(Type sessionType)
+        {
+            EndSession();
+
+            if (sessionType.IsAssignableFrom(typeof(RenderGraphDebugSession)))
+                throw new ArgumentException("Incorrect session type. Type should be derived from RenderGraphDebugSession.");
+
+            s_CurrentDebugSession = Activator.CreateInstance(sessionType) as RenderGraphDebugSession;
+        }
+
         public static void EndSession()
         {
             if (s_CurrentDebugSession != null)
@@ -187,6 +200,9 @@ namespace UnityEngine.Rendering.RenderGraphModule
 
         public static void SetDebugData(string renderGraph, EntityId executionId, DebugData data)
         {
+            data.captureSourceString = s_CurrentDebugSession.connectionName;
+            data.captureTimestamp = $"{DateTime.Now:HH:mm:ss}";
+
             s_CurrentDebugSession.debugDataContainer.SetDebugData(renderGraph, executionId, data);
             onDebugDataUpdated?.Invoke(renderGraph, executionId);
         }

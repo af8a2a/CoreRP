@@ -1741,5 +1741,38 @@ namespace UnityEngine.Rendering
 
             DrawQuad(cmd, GetBlitMaterial(source.dimension), s_BlitShaderPassIndicesMap[pass]);
         }
+
+        /// <summary>
+        /// Draw a full screen triangle with a material into a specific render target and viewport.
+        /// </summary>
+        /// <param name="commandBuffer">Command Buffer used for rendering.</param>
+        /// <param name="viewport">Destination viewport.</param>
+        /// <param name="material">Material used for rendering.</param>
+        /// <param name="destination">Destination render target.</param>
+        /// <param name="cubemapFace">Optional cubemap face to render to.</param>
+        /// <param name="properties">Optional material property block.</param>
+        /// <param name="shaderPassId">Optional pass index to use.</param>
+        /// <param name="depthSlice">Optional depth slice to render to.</param>
+        public static void DrawFullScreen(CommandBuffer commandBuffer, Rect viewport, Material material, RenderTargetIdentifier destination, CubemapFace cubemapFace, MaterialPropertyBlock properties = null, int shaderPassId = 0, int depthSlice = -1)
+        {
+            CoreUtils.SetRenderTarget(commandBuffer, destination, ClearFlag.None, 0, cubemapFace, depthSlice);
+            commandBuffer.SetViewport(viewport);
+            commandBuffer.DrawProcedural(Matrix4x4.identity, material, shaderPassId, MeshTopology.Triangles, 3, 1, properties);
+        }
+
+        /// <summary>
+        /// Draw a full screen triangle with a material into a specific render target and viewport.
+        /// </summary>
+        /// <param name="commandBuffer">Command Buffer used for rendering.</param>
+        /// <param name="viewport">Destination viewport.</param>
+        /// <param name="material">Material used for rendering.</param>
+        /// <param name="destination">Destination render target.</param>
+        /// <param name="properties">Optional material property block.</param>
+        /// <param name="shaderPassId">Optional pass index to use.</param>
+        /// <param name="depthSlice">Optional depth slice to render to.</param>
+        public static void DrawFullScreen(CommandBuffer commandBuffer, Rect viewport, Material material, RenderTargetIdentifier destination, MaterialPropertyBlock properties = null, int shaderPassId = 0, int depthSlice = -1)
+        {
+            DrawFullScreen(commandBuffer, viewport, material, destination, CubemapFace.Unknown, properties, shaderPassId, depthSlice);
+        }
     }
 }

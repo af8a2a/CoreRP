@@ -8,53 +8,40 @@ namespace UnityEditor.Rendering
     {
         class PlayerConnection : IDisposable
         {
-            IConnectionState m_ConnectionState;
-
-            bool m_EditorQuitting;
+            public IConnectionState connectionState { get; private set; }
 
             readonly UnityEngine.Events.UnityAction<int> m_OnPlayerConnected;
             readonly UnityEngine.Events.UnityAction<int> m_OnPlayerDisconnected;
 
-            public PlayerConnection(IConnectionState connectionState, UnityEngine.Events.UnityAction<int> onPlayerConnected, UnityEngine.Events.UnityAction<int> onPlayerDisconnected)
+            public PlayerConnection(EditorWindow rgvWindow, UnityEngine.Events.UnityAction<int> onPlayerConnected, UnityEngine.Events.UnityAction<int> onPlayerDisconnected)
             {
-                m_ConnectionState = connectionState;
+                connectionState = PlayerConnectionGUIUtility.GetConnectionState(rgvWindow);
                 m_OnPlayerConnected = onPlayerConnected;
                 m_OnPlayerDisconnected = onPlayerDisconnected;
+            }
 
+            public void Connect()
+            {
                 EditorConnection.instance.Initialize();
                 EditorConnection.instance.RegisterConnection(m_OnPlayerConnected);
                 EditorConnection.instance.RegisterDisconnection(m_OnPlayerDisconnected);
-
-                EditorApplication.quitting += OnEditorQuitting;
             }
 
             public void Dispose()
             {
-                if (m_ConnectionState != null)
+                if (connectionState != null)
                 {
                     EditorConnection.instance.UnregisterConnection(m_OnPlayerConnected);
                     EditorConnection.instance.UnregisterDisconnection(m_OnPlayerDisconnected);
 
-                    // NOTE: There is a bug where editor crashes if we call DisconnectAll during shutdown flow. In this case
-                    // it's fine to skip the disconnect as the player will get notified of it anyway.
-                    if (!m_EditorQuitting)
-                        EditorConnection.instance.DisconnectAll();
-
-                    m_ConnectionState.Dispose();
-                    m_ConnectionState = null;
-
-                    EditorApplication.quitting -= OnEditorQuitting;
+                    connectionState.Dispose();
+                    connectionState = null;
                 }
             }
 
             public void OnConnectionDropdownIMGUI()
             {
-                PlayerConnectionGUILayout.ConnectionTargetSelectionDropdown(m_ConnectionState, EditorStyles.toolbarDropDown, 250);
-            }
-
-            void OnEditorQuitting()
-            {
-                m_EditorQuitting = true;
+                PlayerConnectionGUILayout.ConnectionTargetSelectionDropdown(connectionState, EditorStyles.toolbarDropDown, 250);
             }
         }
     }

@@ -1,3 +1,7 @@
+#if ENABLE_UIELEMENTS_MODULE && (UNITY_EDITOR || DEVELOPMENT_BUILD)
+#define ENABLE_RENDERING_DEBUGGER_UI
+#endif
+
 using System;
 using System.Linq;
 using System.Reflection;
@@ -210,7 +214,7 @@ namespace UnityEngine.Rendering
             // We keep allocated acceleration structures while the Lighting window is open in order to make subsequent bakes faster, but when the window closes we dispose of them
             // Unless a bake is running, in which case we leave disposing to CleanBakeData()
             if (!AdaptiveProbeVolumes.isRunning && !Lightmapping.isRunning)
-                AdaptiveProbeVolumes.Dispose();
+                AdaptiveProbeVolumes.CleanUp();
         }
 
         #region On GUI
@@ -288,12 +292,12 @@ namespace UnityEngine.Rendering
 
         internal static void OpenProbeVolumeDebugPanel(object userData, string[] options, int selected)
         {
-            var debugPanel = EditorWindow.GetWindow<DebugWindow>();
-            debugPanel.titleContent = DebugWindow.Styles.windowTitle;
-            debugPanel.Show();
-            var index = DebugManager.instance.FindPanelIndex(ProbeReferenceVolume.k_DebugPanelName);
-            if (index != -1)
-                DebugManager.instance.RequestEditorWindowPanelIndex(index);
+#if ENABLE_RENDERING_DEBUGGER_UI
+            var debugWindow = EditorWindow.GetWindow<DebugWindow>();
+            debugWindow.titleContent = DebugWindow.s_TitleContent;
+            debugWindow.Show();
+            DebugManager.instance.RequestEditorWindowPanel(ProbeReferenceVolume.k_DebugPanelName);
+#endif
         }
 
         // Need to have this only clear probes when we properly split lightmap and probe baking.
@@ -1070,6 +1074,8 @@ namespace UnityEngine.Rendering
             return true;
         }
 
+        internal bool PrepareAPVAdditionalRequestsBake(ProbeReferenceVolume prv) => prv.isInitialized && prv.enabledBySRP;
+
         static T ObjectFieldWithNew<T>(GUIContent label, T obj, Func<T> onClick) where T : Object
         {
             const int k_NewFieldWidth = 70;
@@ -1216,7 +1222,9 @@ namespace UnityEngine.Rendering
             {
                 if (ProbeReferenceVolume.instance.probeVolumeDebug.realtimeSubdivision)
                 {
+                    #pragma warning disable CS0618 // Type or member is obsolete
                     var probeVolume = GameObject.FindFirstObjectByType<ProbeVolume>();
+#pragma warning restore CS0618 // Type or member is obsolete
                     if (probeVolume != null && probeVolume.isActiveAndEnabled)
                     {
                         var profile = ProbeVolumeBakingSet.GetBakingSetForScene(probeVolume.gameObject.scene);
@@ -1233,6 +1241,9 @@ namespace UnityEngine.Rendering
                 // Include some state tracking here because it's the only function called at each repaint
                 var debug = ProbeReferenceVolume.instance.probeVolumeDebug;
                 var bakingSet = ProbeReferenceVolume.instance.currentBakingSet;
+
+                if (debug == null)
+                    return false;
 
                 bool debugLayers = debug.drawProbes && debug.probeShading == DebugProbeShadingMode.RenderingLayerMasks && bakingSet != null;
                 if (!debug.drawBricks && !debug.drawProbeSamplingDebug && !debugLayers)

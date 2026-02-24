@@ -32,10 +32,6 @@ namespace UnityEngine.Rendering
         /// <param name="settings"><see cref="IDebugDisplaySettings"/> to be registered</param>
         public void RegisterDebug(IDebugDisplaySettings settings)
         {
-#if UNITY_EDITOR
-            if (UnityEditor.BuildPipeline.isBuildingPlayer)
-                return;
-#endif
             DebugManager debugManager = DebugManager.instance;
             List<IDebugDisplaySettingsPanelDisposable> panels = new List<IDebugDisplaySettingsPanelDisposable>();
 
@@ -70,6 +66,8 @@ namespace UnityEngine.Rendering
             };
 
             m_Settings.ForEach(onExecute);
+
+            DebugDisplaySerializer.LoadFoldoutStates();
         }
 
         /// <summary>
@@ -77,6 +75,8 @@ namespace UnityEngine.Rendering
         /// </summary>
         public void UnregisterDebug()
         {
+            DebugDisplaySerializer.SaveFoldoutStates();
+
             DebugManager debugManager = DebugManager.instance;
 
             if (m_DisposablePanels != null)

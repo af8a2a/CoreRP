@@ -34,9 +34,8 @@ namespace UnityEngine.Rendering.RenderGraphModule
         public TextureHandle whiteTextureXR { get; private set; }
         /// <summary>Default 1x1 shadow texture.</summary>
         public TextureHandle defaultShadowTexture { get; private set; }
-        
+        /// <summary>Default 1x1 shadow texture array.</summary>
         public TextureHandle defaultShadowArrayTexture { get; private set; }
-
 
         internal RenderGraphDefaultResources()
         {
@@ -62,12 +61,9 @@ namespace UnityEngine.Rendering.RenderGraphModule
                 Graphics.ExecuteCommandBuffer(cmd);
                 CommandBufferPool.Release(cmd);
             }
-            
-            
-            if (m_ShadowTextureArray2D == null)
-                m_ShadowTextureArray2D = RTHandles.Alloc(1, 1, dimension: TextureDimension.Tex2DArray, depthBufferBits: DepthBits.Depth32, isShadowMap: true,
-                    name: "DefaultShadowTexture");
 
+            if (m_ShadowTextureArray2D == null)
+                m_ShadowTextureArray2D = RTHandles.Alloc(1, 1, slices: 1, depthBufferBits: DepthBits.Depth32, dimension: TextureDimension.Tex2DArray, isShadowMap: true, name: "DefaultShadowTextureArray");
         }
 
         internal void Cleanup()
@@ -80,10 +76,9 @@ namespace UnityEngine.Rendering.RenderGraphModule
 
             m_ShadowTexture2D?.Release();
             m_ShadowTexture2D = null;
-            
-            m_ShadowTextureArray2D?.Release();
-            m_ShadowTextureArray2D = null;  
 
+            m_ShadowTextureArray2D?.Release();
+            m_ShadowTextureArray2D = null;
         }
 
         internal void InitializeForRendering(RenderGraph renderGraph)

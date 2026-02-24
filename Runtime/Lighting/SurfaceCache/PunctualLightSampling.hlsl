@@ -11,7 +11,7 @@
 
 UNIFIED_RT_DECLARE_ACCEL_STRUCT(_RayTracingAccelerationStructure);
 
-StructuredBuffer<SpotLight> _SpotLights;
+StructuredBuffer<PunctualLight> _PunctualLights;
 RWStructuredBuffer<PunctualLightSample> _Samples;
 
 StructuredBuffer<MaterialPool::MaterialEntry> _MaterialEntries;
@@ -24,7 +24,7 @@ SamplerState sampler_TransmissionTextures;
 float _MaterialAtlasTexelSize;
 float _AlbedoBoost;
 uint _FrameIdx;
-uint _SpotLightCount;
+uint _PunctualLightCount;
 
 void SamplePunctualLights(UnifiedRT::DispatchInfo dispatchInfo)
 {
@@ -41,18 +41,19 @@ void SamplePunctualLights(UnifiedRT::DispatchInfo dispatchInfo)
     matPoolParams.atlasTexelSize = _MaterialAtlasTexelSize;
     matPoolParams.albedoBoost = _AlbedoBoost;
 
-    QrngKronecker rng;
+    QrngKronecker2D rng;
     rng.Init(dispatchInfo.globalThreadIndex.x, _FrameIdx);
 
-    const uint spotLightIndex = min(rng.GetFloat(0) * _SpotLightCount, _SpotLightCount - 1);
-    const SpotLight light = _SpotLights[spotLightIndex];
+    const uint spotLightIndex = min(rng.GetSample(0).x * _PunctualLightCount, _PunctualLightCount - 1);
+    const PunctualLight light = _PunctualLights[spotLightIndex];
 
     UnifiedRT::Ray ray;
     ray.tMin = 0;
     ray.tMax = FLT_MAX;
     ray.origin = light.position;
     {
-        float3 localDir = SampleConeUniform(rng.GetFloat(1), rng.GetFloat(1), light.cosAngle);
+        float2 coneSample = rng.GetSample(1);
+        float3 localDir = SampleConeUniform(coneSample.x, coneSample.y, light.cosAngle);
         float3x3 spotBasis = OrthoBasisFromVector(light.direction);
         ray.direction = mul(spotBasis, localDir);
     }
@@ -83,7 +84,7 @@ void SamplePunctualLights(UnifiedRT::DispatchInfo dispatchInfo)
         lightSample.hitNormal = hitGeo.normal;
         lightSample.distance = hitResult.hitDistance;
         lightSample.hitAlbedo = hitMat.baseColor;
-        lightSample.reciprocalDensity = AreaOfSphericalCapWithRadiusOne(light.cosAngle) * _SpotLightCount;
+        lightSample.reciprocalDensity = AreaOfSphericalCapWithRadiusOne(light.cosAngle) * _PunctualLightCount;
         lightSample.hitInstanceId = hitResult.instanceID;
         lightSample.hitPrimitiveIndex = hitResult.primitiveIndex;
         lightSample.intensity = light.intensity;

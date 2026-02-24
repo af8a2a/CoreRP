@@ -389,7 +389,7 @@ namespace UnityEditor.PathTracing.LightBakerBridge
             sceneBounds = new Bounds();
 
             // Extract meshes
-            meshes = new Mesh[bakeInput.meshData.Length];
+            meshes = new Mesh[bakeInput.meshData.Length + bakeInput.terrainData.Length];
             int meshIndex = 0;
             for (int i = 0; i < bakeInput.meshData.Length; i++)
             {
@@ -418,7 +418,6 @@ namespace UnityEditor.PathTracing.LightBakerBridge
                 else
                     LightmapIntegrationHelpers.ComputeUVBounds(meshes[i].uv2, out uvBoundsSizes[i], out uvBoundsOffsets[i]);
             }
-            Debug.Assert(meshes.Length == bakeInput.meshData.Length);
 
             // Baking specific settings
             RenderedGameObjectsFilter filter = RenderedGameObjectsFilter.OnlyStatic;
