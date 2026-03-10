@@ -21,3 +21,6 @@ using System.Runtime.CompilerServices;
 
 // Access for URP Tests so they use internals from Core Runtime
 [assembly: InternalsVisibleTo("Unity.RenderPipelines.Universal.Runtime.Tests")]
+
+// Access for VividRP editor tooling so it can reuse internal light unit helpers from Core Runtime
+[assembly: InternalsVisibleTo("VividRP.Editor")]
