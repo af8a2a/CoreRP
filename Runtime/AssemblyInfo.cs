@@ -24,3 +24,7 @@ using System.Runtime.CompilerServices;
 
 // Access for VividRP editor tooling so it can reuse internal light unit helpers from Core Runtime
 [assembly: InternalsVisibleTo("VividRP.Editor")]
+
+// Access for VividRP runtime so it can use SobolData for blue noise sampling
+[assembly: InternalsVisibleTo("VividRP.Runtime")]
+[assembly: InternalsVisibleTo("VividRP.Editor.Tests")]
