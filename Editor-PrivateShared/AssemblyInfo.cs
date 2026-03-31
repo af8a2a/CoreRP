@@ -8,6 +8,10 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("Unity.RenderPipelines.Universal.Editor")]
 [assembly: InternalsVisibleTo("Unity.RenderPipelines.Universal.Editor.Tests")]
 
+// VividRP
+[assembly: InternalsVisibleTo("VividRP.Editor")]
+[assembly: InternalsVisibleTo("VividRP.Editor.Tests")]
+
 
 //WARNING:
 //  Remember to only use this shared API to cherry pick the code part that you want to
