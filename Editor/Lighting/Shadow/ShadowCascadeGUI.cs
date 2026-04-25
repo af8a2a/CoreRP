@@ -27,10 +27,6 @@ namespace UnityEditor.Rendering
             new Color(0.5f, 0.7f, 0.5f, 1.0f),
             new Color(0.7f, 0.7f, 0.5f, 1.0f),
             new Color(0.7f, 0.5f, 0.5f, 1.0f),
-            new Color(0.9f, 0.5f, 0.5f, 1.0f),
-            new Color(0.9f, 0.7f, 0.5f, 1.0f),
-            new Color(0.9f, 0.7f, 0.7f, 1.0f),
-            new Color(0.9f, 0.7f, 0.9f, 1.0f),
         };
         private static readonly Color kDisabledColor = new Color(0.5f, 0.5f, 0.5f, 0.4f); //Works with both personal and pro skin
 

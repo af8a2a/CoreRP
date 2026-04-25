@@ -43,11 +43,9 @@ struct MaterialPoolParamSet
 {
     StructuredBuffer<MaterialPool::MaterialEntry> materialEntries;
     Texture2DArray albedoTextures;
-    Texture2DArray transmissionTextures;
     Texture2DArray emissionTextures;
     SamplerState emissionSampler;
     SamplerState albedoSampler;
-    SamplerState transmissionSampler;
     float atlasTexelSize; // The size of 1 texel in the atlases above
     float albedoBoost;
 };
@@ -70,14 +68,77 @@ struct PunctualLightBounceRadianceSample
     }
 };
 
+float Square(float x)
+{
+    return x * x;
+}
+
+// Many distance window functions are possible. This one is the square root of
+// the one currently used in URP: (1.0 - saturate((distanceSqr * 1.0 / rangeSqr)^2)).
+float SharpPunctualLightRangeWindow(float range, float distanceSquared)
+{
+    const float lightRangeSquared = Square(range);
+    const float distanceSquaredOverRangeSquared = distanceSquared / lightRangeSquared;
+    const float window = 1.0f - saturate(distanceSquaredOverRangeSquared * distanceSquaredOverRangeSquared);
+    return window;
+}
+
+// Many distance window functions are possible. This one matches the one currently
+// used in URP: (1.0 - saturate((distanceSqr * 1.0 / rangeSqr)^2))^2.
+float SmoothPunctualLightRangeWindow(float range, float distanceSquared)
+{
+    const float window = SharpPunctualLightRangeWindow(range, distanceSquared);
+    return Square(window);
+}
+
+// Sharp spot light angle attenuation function:
+// f(cosHitAngle) = saturate((cosHitAngle - cosOuterAngle) / (cosOuterAngle - cosInnerAngle)).
+// This function is linear in cosHitAngle and satisfies f(cosOuterAngle) = 0 and
+// f(cosInnerAngle) = 1.
+// For perf reasons, the implementation assumes cosHitAngle <= cosOuterAngle.
+// angleAttenuationValue1: If innerAngle != outerAngle then 1/(cosInnerAngle-cosOuterAngle), otherwise 0.
+// angleAttenuationValue2: If innerAngle != outerAngle then cosOuterAngle/(cosOuterAngle-cosInnerAngle), otherwise 1.
+float SharpSpotLightAngleAttenuation(float3 spotDirection, float3 hitDirection, float angleAttenuationValue1, float angleAttenuationValue2)
+{
+    // Note that
+    // (cosHitAngle - cosOuterAngle) / (cosOuterAngle - cosInnerAngle) =
+    // (cosHitAngle) * 1/(cosOuterAngle - cosInnerAngle) + cosOuterAngle / (cosInnerAngle - cosOuterAngle)
+    // a * b + c
+    // where
+    // a = cosHitAngle,
+    // b = 1/(cosOuterAngle - cosInnerAngle),
+    // c = cosOuterAngle / (cosInnerAngle - cosOuterAngle).
+    // We exploit this to reduce a fused multiply-add.
+    const float cosHitAngle = dot(spotDirection, hitDirection);
+    const float attenuation = saturate(cosHitAngle * angleAttenuationValue1 + angleAttenuationValue2);
+    return attenuation;
+}
+
+// Smooth spot light angle attenuation linear in cos(hitAngle), then clamped, then squared for smoothing.
+// More precisely: saturate((cosHitAngle - cosOuterAngle) / (cosOuterAngle - cosInnerAngle))^2.
+// This matches URP's current behaviour (see AngleAttenuation in RealtimeLights.hlsl).
+float SmoothSpotLightAngleAttenuation(float3 spotDirection, float3 hitDirection, float angleAttenuationValue1, float angleAttenuationValue2)
+{
+    const float attenuation = SharpSpotLightAngleAttenuation(spotDirection, hitDirection, angleAttenuationValue1, angleAttenuationValue2);
+    return Square(attenuation); // Square to smoothen fade-out.
+}
+
+bool IsSpotLight(float cosOuterAngle)
+{
+    // Here we assume that spot lights are not allowed to have an outer angle of PI or larger.
+    return cosOuterAngle != -1.0f;
+}
+
 PunctualLightBounceRadianceSample SamplePunctualLightBounceRadiance(
     UnifiedRT::DispatchInfo dispatchInfo,
     UnifiedRT::RayTracingAccelStruct accelStruct,
+    StructuredBuffer<PunctualLight> lights,
     StructuredBuffer<PunctualLightSample> punctualLightSamples,
     uint punctualLightSampleCount,
     float uniformRand,
     float3 position,
-    float3 normal)
+    float3 normal,
+    float additionalRayOffset)
 {
     PunctualLightBounceRadianceSample result = (PunctualLightBounceRadianceSample)0;
 
@@ -89,7 +150,7 @@ PunctualLightBounceRadianceSample SamplePunctualLightBounceRadiance(
         if (epsilon < planeDistance) // Light sample hit point must be "in front" of the patch.
         {
             UnifiedRT::Ray reconnectionRay;
-            reconnectionRay.origin = OffsetRayOrigin(position, normal);
+            reconnectionRay.origin = OffsetRayOrigin(position, normal, additionalRayOffset);
             reconnectionRay.direction = normalize(punctualLightSample.hitPos - position);
             reconnectionRay.tMin = 0;
             reconnectionRay.tMax = FLT_MAX;
@@ -105,32 +166,50 @@ PunctualLightBounceRadianceSample SamplePunctualLightBounceRadiance(
                     reconnectionResult.instanceID == punctualLightSample.hitInstanceId &&
                     reconnectionResult.primitiveIndex == punctualLightSample.hitPrimitiveIndex)
                 {
+                    const PunctualLight light = lights[punctualLightSample.lightIndex];
                     result.direction = reconnectionRay.direction;
                     #if 0 // readable version
-                    const float bounceCosTerm = dot(-punctualLightSample.dir, punctualLightSample.hitNormal);
-                    const float bounceSolidAngleToAreaJacobian = 1.0f / (punctualLightSample.distance * punctualLightSample.distance); // To integrate over punctual light we must switch to area measure.
+                    const float distanceSquared = Square(punctualLightSample.distance);
+                    const float rangeWindow = SmoothPunctualLightRangeWindow(light.range, distanceSquared);
+                    float angularAttenuation = 1.0f;
+                    if (IsSpotLight(light.cosOuterAngle))
+                        angularAttenuation = SmoothSpotLightAngleAttenuation(light.direction, punctualLightSample.rayDirection, light.angleAttenuationValue1, light.angleAttenuationValue2);
+
+                    const float bounceCosTerm = dot(-punctualLightSample.rayDirection, punctualLightSample.hitNormal);
+                    const float bounceSolidAngleToAreaJacobian = 1.0f / distanceSquared; // To integrate over punctual light we must switch to area measure.
                     const float3 brdf = punctualLightSample.hitAlbedo * INV_PI;
-                    const float3 punctualLightBouncedRadiance = bounceCosTerm * bounceSolidAngleToAreaJacobian * punctualLightSample.intensity * brdf;
+                    const float3 punctualLightBouncedRadiance = bounceCosTerm * bounceSolidAngleToAreaJacobian * light.intensity * brdf;
 
                     // We transform from patch solid angle measure to (common) surface area measure to punctual light solid angle measure.
                     const float patchSolidAngleToBounceAreaJacobian = dot(-reconnectionRay.direction, punctualLightSample.hitNormal) / (reconnectionResult.hitDistance * reconnectionResult.hitDistance);
-                    const float bounceAreaToLightSolidAngleJacobian = punctualLightSample.distance * punctualLightSample.distance / dot(-punctualLightSample.dir, punctualLightSample.hitNormal);
+                    const float bounceAreaToLightSolidAngleJacobian = distanceSquared / dot(-punctualLightSample.rayDirection, punctualLightSample.hitNormal);
                     const float patchSolidAngleToLightSolidAngleJacobian = patchSolidAngleToBounceAreaJacobian * bounceAreaToLightSolidAngleJacobian;
 
                     if (isfinite(bounceSolidAngleToAreaJacobian) && isfinite(patchSolidAngleToBounceAreaJacobian))
-                        result.radianceOverDensity = punctualLightBouncedRadiance * patchSolidAngleToLightSolidAngleJacobian * punctualLightSample.reciprocalDensity;
+                        result.radianceOverDensity = punctualLightBouncedRadiance * patchSolidAngleToLightSolidAngleJacobian * punctualLightSample.reciprocalDensity * rangeWindow * angularAttenuation;
                     else
                         result.MarkInvalid();
                     #else // optimized version
-                    const float reciprocalSquaredDistance = rcp(reconnectionResult.hitDistance * reconnectionResult.hitDistance);
-                    if (isfinite(reciprocalSquaredDistance))
+                    const float reciprocalReconnectionDistance = rcp(reconnectionResult.hitDistance);
+                    if (isfinite(reciprocalReconnectionDistance))
+                    {
+                        const float distanceSquared = Square(punctualLightSample.distance);
+                        const float rangeWindow = SharpPunctualLightRangeWindow(light.range, distanceSquared);
+
+                        float angularAttenuation = 1.0f;
+                        if (IsSpotLight(light.cosOuterAngle))
+                            angularAttenuation = SharpSpotLightAngleAttenuation(light.direction, punctualLightSample.rayDirection, light.angleAttenuationValue1, light.angleAttenuationValue2);
+
                         result.radianceOverDensity =
                             INV_PI * dot(-reconnectionRay.direction, punctualLightSample.hitNormal) *
                             punctualLightSample.reciprocalDensity *
-                            reciprocalSquaredDistance *
-                            punctualLightSample.intensity * punctualLightSample.hitAlbedo;
+                            light.intensity * punctualLightSample.hitAlbedo *
+                            Square(reciprocalReconnectionDistance * rangeWindow * angularAttenuation);
+                    }
                     else
+                    {
                         result.MarkInvalid();
+                    }
                     #endif
                 }
             }
@@ -149,15 +228,13 @@ float3 OutgoingDirectionalBounceAndMultiBounceRadiance(
     float3 dirLightIntensity,
     bool multiBounce,
     IrradianceBufferType patchIrradiances,
-    StructuredBuffer<uint> cellPatchIndices,
-    uint volumeSpatialResolution,
-    StructuredBuffer<int3> cascadeOffsets,
-    float3 volumeTargetPos,
-    uint cascadeCount,
-    float volumeVoxelMinSize,
+    CellPatchIndexBufferType cellPatchIndices,
+    PatchUtil::VolumeParamSet volumeParams,
     float3 albedo,
-    float3 emission)
+    float3 emission,
+    out bool multiBounceSurfaceCacheMiss)
 {
+    multiBounceSurfaceCacheMiss = false;
     float3 radiance = 0.0f;
 
     if (any(dirLightIntensity != 0.0f))
@@ -181,9 +258,11 @@ float3 OutgoingDirectionalBounceAndMultiBounceRadiance(
 
     if (multiBounce)
     {
-        float3 cacheRead = PatchUtil::ReadPlanarIrradiance(volumeTargetPos, patchIrradiances, cellPatchIndices, volumeSpatialResolution, cascadeOffsets, cascadeCount, volumeVoxelMinSize, position, normal);
+        float3 cacheRead = PatchUtil::ReadPlanarIrradiance(patchIrradiances, cellPatchIndices, volumeParams, position, normal);
         if (all(cacheRead != PatchUtil::invalidIrradiance))
             radiance += cacheRead;
+        else
+            multiBounceSurfaceCacheMiss = true;
     }
 
     radiance *= albedo * INV_PI;
@@ -202,12 +281,12 @@ float3 IncomingEnviromentAndDirectionalBounceAndMultiBounceRadiance(
     TextureCube<float3> envTex,
     SamplerState envSampler,
     IrradianceBufferType patchIrradiances,
-    StructuredBuffer<uint> cellPatchIndices,
-    uint volumeSpatialResolution,
-    StructuredBuffer<int3> cascadeOffsets,
-    float3 volumeTargetPos,
-    uint cascadeCount,
-    float volumeVoxelMinSize)
+    PatchGeometryBufferType patchGeometries,
+    RWStructuredBuffer<PatchUtil::PatchStatisticsSet> patchStatistics,
+    PatchUtil::PatchAllocationParamSet allocParams,
+    PatchUtil::VolumeParamSet volumeParams,
+    bool enablePatchAllocation,
+    uint frameIndex)
 {
     UnifiedRT::Hit hitResult = UnifiedRT::TraceRayClosestHit(dispatchInfo, accelStruct, 0xFFFFFFFF, ray, UnifiedRT::kRayFlagNone);
     float3 radiance;
@@ -221,20 +300,11 @@ float3 IncomingEnviromentAndDirectionalBounceAndMultiBounceRadiance(
         {
             const UnifiedRT::InstanceData hitInstance = UnifiedRT::GetInstance(hitResult.instanceID);
             const SurfaceGeometry hitGeo = FetchSurfaceGeometry(hitInstance, hitResult);
-            const MaterialPool::MaterialProperties hitMat = MaterialPool::LoadMaterialProperties(
-                matPoolParams.materialEntries,
-                matPoolParams.albedoTextures,
-                matPoolParams.albedoSampler,
-                matPoolParams.transmissionTextures,
-                matPoolParams.transmissionSampler,
-                matPoolParams.emissionTextures,
-                matPoolParams.emissionSampler,
-                matPoolParams.albedoBoost,
-                matPoolParams.atlasTexelSize,
-                hitInstance.userMaterialID,
-                hitGeo.uv0,
-                hitGeo.uv1);
+            const MaterialPool::MaterialEntry matEntry = matPoolParams.materialEntries[hitInstance.userMaterialID];
+            const float3 hitAlbedo = MaterialPool::LoadAlbedoWithBoost(matEntry, matPoolParams.albedoTextures, matPoolParams.albedoSampler, matPoolParams.atlasTexelSize, matPoolParams.albedoBoost, hitGeo.uv0, hitGeo.uv1);
+            const float3 hitEmission = MaterialPool::LoadEmission(matEntry, matPoolParams.emissionTextures, matPoolParams.emissionSampler, matPoolParams.atlasTexelSize, hitGeo.uv0, hitGeo.uv1);
 
+            bool multiBounceSurfaceCacheMiss = false;
             radiance = OutgoingDirectionalBounceAndMultiBounceRadiance(
                 hitGeo.position,
                 hitGeo.normal,
@@ -244,14 +314,26 @@ float3 IncomingEnviromentAndDirectionalBounceAndMultiBounceRadiance(
                 dirLightIntensity,
                 multiBounce,
                 patchIrradiances,
-                cellPatchIndices,
-                volumeSpatialResolution,
-                cascadeOffsets,
-                volumeTargetPos,
-                cascadeCount,
-                volumeVoxelMinSize,
-                hitMat.baseColor,
-                hitMat.emissive);
+                allocParams.cellPatchIndices,
+                volumeParams,
+                hitAlbedo,
+                hitEmission,
+                multiBounceSurfaceCacheMiss);
+
+            #if BOUNCE_PATCH_ALLOCATION
+            if (multiBounceSurfaceCacheMiss && enablePatchAllocation)
+            {
+                PatchUtil::AllocatePatch(
+                    hitGeo.position,
+                    hitGeo.normal,
+                    patchIrradiances,
+                    patchGeometries,
+                    patchStatistics,
+                    allocParams,
+                    volumeParams,
+                    frameIndex);
+            }
+            #endif
         }
     }
     else

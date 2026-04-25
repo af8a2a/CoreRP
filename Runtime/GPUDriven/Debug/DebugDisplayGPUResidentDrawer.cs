@@ -15,6 +15,7 @@ namespace UnityEngine.Rendering
     [Serializable]
     public class DebugDisplayGPUResidentDrawer : IDebugDisplaySettingsData, ISerializedDebugDisplaySettings
     {
+#if !UNITY_WEBGL_RENDERER_ONLY
         const string k_FormatString = "{0}";
         const float k_RefreshRate = 1f / 5f;
         const int k_MaxViewCount = 32;
@@ -234,15 +235,11 @@ namespace UnityEngine.Rendering
             };
         }
 
-        static bool s_GRDWasEnabled;
-
         [DisplayInfo(name = "Rendering", order = 5)]
         private class SettingsPanel : DebugDisplaySettingsPanel
         {
             public SettingsPanel(DebugDisplayGPUResidentDrawer data)
             {
-                s_GRDWasEnabled = GPUResidentDrawer.IsInitialized();
-
                 DocumentationUtils.TryGetHelpURL(typeof(DebugDisplayGPUResidentDrawer), out var documentationUrl);
                 var foldout = new DebugUI.Foldout()
                 {
@@ -257,13 +254,6 @@ namespace UnityEngine.Rendering
                     style = MessageBox.Style.Warning,
                     messageCallback = () =>
                     {
-                        // HACK: Reload the UI if GRD enabled state changes
-                        if (s_GRDWasEnabled != GPUResidentDrawer.IsInitialized())
-                        {
-                            s_GRDWasEnabled = GPUResidentDrawer.IsInitialized();
-                            DebugManager.instance.Reset();
-                        }
-
                         var settings = GPUResidentDrawer.GetGlobalSettingsFromRPAsset();
                         return GPUResidentDrawer.IsGPUResidentDrawerSupportedBySRP(settings, out var msg, out var _) ? string.Empty : msg;
                     },
@@ -271,7 +261,9 @@ namespace UnityEngine.Rendering
                 };
                 foldout.children.Add(helpBox);
 
-                // HACK: Avoid creating GRD debug modes when it's not enabled.
+                GPUResidentDrawer.initializedChanged += OnGPUResidentDrawerInitialzedChanged;
+
+                // Avoid creating GRD debug modes when it's not enabled.
                 // This debug UI currently creates ~650 DebugUI Widgets (over 80% of all debug widgets in URP).
                 // To avoid the overhead, we don't create them if GRD is not enabled. If GRD gets enabled while window is open,
                 // we refresh the window. It would probably be a good idea to rethink how the stats tables are implemented.
@@ -305,6 +297,21 @@ namespace UnityEngine.Rendering
                 });
 
                 AddInstanceCullingStatsWidget(data);
+            }
+
+            private void OnGPUResidentDrawerInitialzedChanged(bool previousValue, bool currentValue)
+            {
+                // Reload the UI if GRD enabled state changes, from disabled to enabled only, as the UI did not have all the widgets and we need to add them
+                // in assembly reloads, or entering playmode we do not have this code path and the SettingsPanel will be recreated itself by the Rendering Debugger
+                // reconstruction.
+                if ( previousValue == false && currentValue == true )
+                    DebugManager.instance.Reset();
+            }
+
+            public override void Dispose()
+            {
+                base.Dispose();
+                GPUResidentDrawer.initializedChanged -= OnGPUResidentDrawerInitialzedChanged;
             }
 
             private void AddInstanceCullingStatsWidget(DebugDisplayGPUResidentDrawer data)
@@ -532,5 +539,26 @@ namespace UnityEngine.Rendering
         }
 
         #endregion
+#else
+        public bool occluderDebugViewEnable = false;
+
+        public bool AreAnySettingsActive => false;
+        public bool IsPostProcessingAllowed => true;
+        public bool IsLightingActive => true;
+        public bool TryGetScreenClearColor(ref Color color) => false;
+
+        IDebugDisplaySettingsPanelDisposable IDebugDisplaySettingsData.CreatePanel()
+        {
+            return new EmptySettingsPanel();
+        }
+
+        private class EmptySettingsPanel : IDebugDisplaySettingsPanelDisposable
+        {
+            public string PanelName => string.Empty;
+            public DebugUI.Widget[] Widgets => Array.Empty<DebugUI.Widget>();
+            public DebugUI.Flags Flags => DebugUI.Flags.None;
+            public void Dispose() {}
+        }
+#endif
     }
 }

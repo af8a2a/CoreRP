@@ -183,43 +183,43 @@ namespace UnityEditor.PathTracing.LightBakerBridge
             return outputTypes;
         }
 
-        private static bool LightmapRequestOutputTypeToIntegratedOutputType(LightmapRequestOutputType type, out IntegratedOutputType integratedOutputType)
+        private static void LightmapRequestOutputTypeToIntegratedOutputType(LightmapRequestOutputType type, List<IntegratedOutputType> outputTypes)
         {
-            integratedOutputType = IntegratedOutputType.AO;
             switch (type)
             {
                 case LightmapRequestOutputType.IrradianceIndirect:
-                    integratedOutputType = IntegratedOutputType.Indirect;
-                    return true;
+                    outputTypes.Add(IntegratedOutputType.Indirect);
+                    return;
                 case LightmapRequestOutputType.IrradianceDirect:
-                    integratedOutputType = IntegratedOutputType.Direct;
-                    return true;
+                    outputTypes.Add(IntegratedOutputType.Direct);
+                    outputTypes.Add(IntegratedOutputType.DirectBRDF);
+                    return;
                 case LightmapRequestOutputType.Occupancy: // Occupancy do not need accumulation
-                    return false;
+                    return;
                 case LightmapRequestOutputType.Validity:
-                    integratedOutputType = IntegratedOutputType.Validity;
-                    return true;
+                    outputTypes.Add(IntegratedOutputType.Validity);
+                    return;
                 case LightmapRequestOutputType.DirectionalityIndirect:
-                    integratedOutputType = IntegratedOutputType.DirectionalityIndirect;
-                    return true;
+                    outputTypes.Add(IntegratedOutputType.DirectionalityIndirect);
+                    return;
                 case LightmapRequestOutputType.DirectionalityDirect:
-                    integratedOutputType = IntegratedOutputType.DirectionalityDirect;
-                    return true;
+                    outputTypes.Add(IntegratedOutputType.DirectionalityDirect);
+                    outputTypes.Add(IntegratedOutputType.DirectionalityDirectBRDF);
+                    return;
                 case LightmapRequestOutputType.AmbientOcclusion:
-                    integratedOutputType = IntegratedOutputType.AO;
-                    return true;
+                    outputTypes.Add(IntegratedOutputType.AO);
+                    return;
                 case LightmapRequestOutputType.Shadowmask:
-                    integratedOutputType = IntegratedOutputType.ShadowMask;
-                    return true;
+                    outputTypes.Add(IntegratedOutputType.ShadowMask);
+                    return;
                 // These types do not need accumulation:
                 case LightmapRequestOutputType.Normal:
                 case LightmapRequestOutputType.ChartIndex:
                 case LightmapRequestOutputType.OverlapPixelIndex:
                 case LightmapRequestOutputType.IrradianceEnvironment:
-                    return false;
+                    return;
             }
             Debug.Assert(false, $"Error unknown LightmapRequestOutputType {type}.");
-            return false;
         }
 
         // We can ignore the G-Buffer data part of atlassing, we are using stochastic sampling instead.
@@ -345,7 +345,6 @@ namespace UnityEditor.PathTracing.LightBakerBridge
                 samplingResources.Load((uint)UnityEngine.Rendering.Sampling.SamplingResources.ResourceType.All);
 
                 // Deserialize BakeInput, inject data into world
-                const bool useLegacyBakingBehavior = true;
                 const bool autoEstimateLUTRange = true;
                 BakeInputToWorldConversion.InjectBakeInputData(world.PathTracingWorld, autoEstimateLUTRange, in bakeInput,
                     out Bounds sceneBounds, out world.Meshes, out FatInstance[] fatInstances, out world.LightHandles,
@@ -356,9 +355,9 @@ namespace UnityEditor.PathTracing.LightBakerBridge
 
                 // Build world with extracted data
                 const bool emissiveSampling = true;
-                world.PathTracingWorld.Build(sceneBounds, deviceContext.GetCommandBuffer(), ref world.ScratchBuffer, samplingResources, emissiveSampling, 1024);
+                world.PathTracingWorld.Build(sceneBounds, deviceContext.GetCommandBuffer(), ref world.ScratchBuffer, samplingResources, emissiveSampling, 1024, (int)bakeInput.lightingSettings.lightGridMaxCells);
 
-                LightmapBakeSettings lightmapBakeSettings = GetLightmapBakeSettings(bakeInput);
+                LightmapBakeSettings lightmapBakeSettings = GetLightmapBakeSettings(in bakeInput.lightingSettings, world.PathTracingWorld);
                 // Build array of lightmap descriptors based on the atlassing data and instances.
                 LightmapDesc[] lightmapDescriptors = PopulateLightmapDescsFromAtlassing(in lightmapRequestData.atlassing, in fatInstances);
                 SortInstancesByMeshAndResolution(lightmapDescriptors);
@@ -367,7 +366,7 @@ namespace UnityEditor.PathTracing.LightBakerBridge
                 ulong lightmapWorkSteps = CalculateWorkStepsForLightmapRequests(in lightmapRequestData, lightmapDescriptors, lightmapBakeSettings);
                 progressState.SetTotalWorkSteps(probeWorkSteps + lightmapWorkSteps);
 
-                if (!ExecuteProbeRequests(in bakeInput, in probeRequestData, deviceContext, useLegacyBakingBehavior, world, progressState, samplingResources))
+                if (!ExecuteProbeRequests(in bakeInput, in probeRequestData, deviceContext, world, progressState, samplingResources))
                     return false;
 
                 if (lightmapRequestData.requests.Length <= 0)
@@ -377,7 +376,7 @@ namespace UnityEditor.PathTracing.LightBakerBridge
                 LightmapResourceLibrary resources = new();
                 resources.Load(world.RayTracingContext);
 
-                if (ExecuteLightmapRequests(in lightmapRequestData, deviceContext, world, in fatInstances, in lodInstances, in lodgroupToContributorInstances, integrationSettings, useLegacyBakingBehavior, resources, progressState, lightmapDescriptors, lightmapBakeSettings, samplingResources) != Result.Success)
+                if (ExecuteLightmapRequests(in lightmapRequestData, deviceContext, world, in fatInstances, in lodInstances, in lodgroupToContributorInstances, integrationSettings, resources, progressState, lightmapDescriptors, lightmapBakeSettings, samplingResources) != Result.Success)
                     return false;
 
                 CoreUtils.Destroy(resources.UVFallbackBufferGenerationMaterial);
@@ -470,16 +469,31 @@ namespace UnityEditor.PathTracing.LightBakerBridge
             return retVal;
         }
 
-        internal static LightmapBakeSettings GetLightmapBakeSettings(in BakeInput bakeInput)
+        internal static LightmapBakeSettings GetLightmapBakeSettings(in LightingSettings lightingSettings, World world)
         {
+            // We typically want to shoot much fewer BRDF-rays than light-sample-rays for the purposes of MIS
+            // when calculating direct illumination. As these rays only help with convergence of emissives and
+            // environment, we base the sample count on the number of emissive and environment lights.
+            uint emissiveAndEnvLightCount = (uint)world.EnvLightCount + (uint)world.MeshLightCount;
+            uint brdfSampleCount = emissiveAndEnvLightCount * lightingSettings.lightmapSampleCounts.directSampleCount;
+            if (lightingSettings.directEmissiveSamplingMode == EmissiveSamplingMode.LightSampling)
+                brdfSampleCount = 0;
+
             // Lightmap settings
             LightmapBakeSettings lightmapBakeSettings = new()
             {
-                AOSampleCount = math.max(0, bakeInput.lightingSettings.lightmapSampleCounts.indirectSampleCount),
-                DirectSampleCount = math.max(0, bakeInput.lightingSettings.lightmapSampleCounts.directSampleCount),
-                IndirectSampleCount = math.max(0, bakeInput.lightingSettings.lightmapSampleCounts.indirectSampleCount),
-                BounceCount = math.max(0, bakeInput.lightingSettings.maxBounces),
-                AOMaxDistance = math.max(0.0f, bakeInput.lightingSettings.aoDistance)
+                AOSampleCount = math.max(0, lightingSettings.lightmapSampleCounts.indirectSampleCount),
+                DirectSampleCount = math.max(0, lightingSettings.lightmapSampleCounts.directSampleCount),
+                DirectBRDFSampleCount = brdfSampleCount,
+                IndirectSampleCount = math.max(0, lightingSettings.lightmapSampleCounts.indirectSampleCount),
+                BounceCount = math.max(0, lightingSettings.maxBounces),
+                AOMaxDistance = math.max(0.0f, lightingSettings.aoDistance),
+                DirectLightSamplingMode = lightingSettings.directLightSamplingMode,
+                DirectRISCandidateCount = lightingSettings.directRISCandidateCount,
+                IndirectLightSamplingMode = lightingSettings.indirectLightSamplingMode,
+                IndirectRISCandidateCount = lightingSettings.indirectRISCandidateCount,
+                DirectEmissiveSamplingMode = lightingSettings.directEmissiveSamplingMode,
+                IndirectEmissiveSamplingMode = lightingSettings.indirectEmissiveSamplingMode,
             };
             lightmapBakeSettings.ValiditySampleCount = lightmapBakeSettings.IndirectSampleCount;
             return lightmapBakeSettings;
@@ -872,7 +886,6 @@ namespace UnityEditor.PathTracing.LightBakerBridge
             in Dictionary<int, List<LodInstanceBuildData>> lodInstances,
             in Dictionary<Int32, List<ContributorLodInfo>> lodgroupToContributorInstances,
             IntegrationSettings integrationSettings,
-            bool useLegacyBakingBehavior,
             LightmapResourceLibrary lightmapResourceLib,
             BakeProgressState progressState,
             LightmapDesc[] lightmapDescriptors,
@@ -884,19 +897,27 @@ namespace UnityEditor.PathTracing.LightBakerBridge
             bool debugDispatches = integrationSettings.DebugDispatches;
             bool doDirectionality = AnyLightmapRequestHasOutput(lightmapRequestData.requests, LightmapRequestOutputType.DirectionalityDirect) || AnyLightmapRequestHasOutput(lightmapRequestData.requests, LightmapRequestOutputType.DirectionalityIndirect);
 
-            // Find the max index count in any mesh, so we can pre-allocate various buffers based on it.
+            // Find the max index and vertex count in any mesh, so we can pre-allocate various buffers based on it.
             uint maxIndexCount = 1;
+            uint maxVertexCount = 1;
             for (int meshIdx = 0; meshIdx < world.Meshes.Length; ++meshIdx)
             {
                 maxIndexCount = Math.Max(maxIndexCount, world.Meshes[meshIdx].GetTotalIndexCount());
+                maxVertexCount = Math.Max(maxVertexCount, (uint)world.Meshes[meshIdx].vertexCount);
             }
 
             (int width, int height)[] atlasSizes = lightmapRequestData.atlassing.m_AtlasSizes;
             int initialLightmapResolution = atlasSizes.Length > 0 ? atlasSizes[0].width : 1024;
-            if (!lightmappingContext.Initialize(deviceContext, initialLightmapResolution, initialLightmapResolution, world, maxIndexCount, lightmapResourceLib))
+            if (!lightmappingContext.Initialize(deviceContext, initialLightmapResolution, initialLightmapResolution, world, maxIndexCount, maxVertexCount, lightmapResourceLib))
                 return Result.InitializeFailure;
 
-            lightmappingContext.IntegratorContext.Initialize(samplingResources, lightmapResourceLib, !useLegacyBakingBehavior);
+            CommandBuffer cmd = lightmappingContext.GetCommandBuffer();
+            lightmappingContext.IntegratorContext.Initialize(samplingResources, lightmapResourceLib);
+
+            // Setup keywords only once before accumulation.
+            lightmappingContext.IntegratorContext.LightmapDirectIntegrator.SetupLightSamplingKeywords(cmd, lightmapBakeSettings.DirectLightSamplingMode, lightmapBakeSettings.DirectEmissiveSamplingMode);
+            lightmappingContext.IntegratorContext.LightmapDirectBRDFIntegrator.SetupLightSamplingKeywords(cmd, lightmapBakeSettings.DirectEmissiveSamplingMode);
+            lightmappingContext.IntegratorContext.LightmapIndirectIntegrator.SetupLightSamplingKeywords(cmd, lightmapBakeSettings.IndirectLightSamplingMode, lightmapBakeSettings.IndirectEmissiveSamplingMode);
 
             // Chart identification happens in multithreaded fashion on the CPU. We start it immediately so it can run in tandem with other work.
             bool usesChartIdentification = AnyLightmapRequestHasOutput(lightmapRequestData.requests, LightmapRequestOutputType.ChartIndex) ||
@@ -916,7 +937,6 @@ namespace UnityEditor.PathTracing.LightBakerBridge
                 }
             }
 
-            CommandBuffer cmd = lightmappingContext.GetCommandBuffer();
             using LightmapIntegrationHelpers.GPUSync gpuSync = new(); // used for sync points in debug mode
             gpuSync.Create();
 
@@ -1047,6 +1067,7 @@ namespace UnityEditor.PathTracing.LightBakerBridge
                                 // now perform the normal generation for the chunk
                                 // geometry pool bindings
                                 Util.BindAccelerationStructure(cmd, normalShader, world.PathTracingWorld.GetAccelerationStructure());
+                                Util.BindMaterialsAndTextures(cmd, normalShader, world.PathTracingWorld);
 
                                 var requiredSizeInBytes = normalShader.GetTraceScratchBufferRequiredSizeInBytes((uint)chunkSize, 1, 1);
                                 if (requiredSizeInBytes > 0)
@@ -1068,7 +1089,7 @@ namespace UnityEditor.PathTracing.LightBakerBridge
                                 normalShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.ChunkOffsetX, (int)chunkOffset.x);
                                 normalShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.ChunkOffsetY, (int)chunkOffset.y);
 
-                                ExpansionHelpers.PopulateAccumulationIndirectDispatch(cmd, normalShader, expansionShaders, populateNormalShaderDispatchKernel, 1, compactedGBufferLength, indirectRayTracingDispatchBuffer);
+                                ExpansionHelpers.PopulateAccumulationIndirectDispatch(cmd, expansionShaders, populateNormalShaderDispatchKernel, 1, compactedGBufferLength, indirectRayTracingDispatchBuffer);
                                 normalShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.SampleOffset, 0);
                                 normalShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.MaxLocalSampleCount, 1);
                                 cmd.BeginSample("Normal Generation");
@@ -1224,34 +1245,37 @@ namespace UnityEditor.PathTracing.LightBakerBridge
                         lightmappingContext.ClearOutputs();
 
                         IntegratedOutputType integratedOutputType = integratedRequestOutputType.Key;
-                        foreach (var bakeInstance in currentLightmapDesc.BakeInstances)
+                        if (lightmapBakeSettings.GetSampleCount(integratedOutputType) > 0)
                         {
-                            if (!GetInstanceUVResources(cmd, lightmappingContext, bakeInstance, out _, out var uvAS, out var uvFallbackBuffer))
-                                return Result.AddResourcesToCacheFailure;
+                            foreach (var bakeInstance in currentLightmapDesc.BakeInstances)
+                            {
+                                if (!GetInstanceUVResources(cmd, lightmappingContext, bakeInstance, out _, out var uvAS, out var uvFallbackBuffer))
+                                    return Result.AddResourcesToCacheFailure;
 
-                            var result = IntegrateLightmapInstance(
-                                cmd,
-                                lightmapIndex,
-                                integratedRequestOutputType.Key,
-                                bakeInstance,
-                                lodInstances,
-                                lodgroupToContributorInstances,
-                                lightmappingContext,
-                                uvAS,
-                                uvFallbackBuffer,
-                                integrationSettings,
-                                lightmapBakeSettings,
-                                doDirectionality,
-                                progressState,
-                                gpuSync,
-                                debugDispatches
-                            );
+                                var result = IntegrateLightmapInstance(
+                                    cmd,
+                                    lightmapIndex,
+                                    integratedOutputType,
+                                    bakeInstance,
+                                    lodInstances,
+                                    lodgroupToContributorInstances,
+                                    lightmappingContext,
+                                    uvAS,
+                                    uvFallbackBuffer,
+                                    integrationSettings,
+                                    lightmapBakeSettings,
+                                    doDirectionality,
+                                    progressState,
+                                    gpuSync,
+                                    debugDispatches
+                                );
 
-                            if (result != Result.Success)
-                                return result;
+                                if (result != Result.Success)
+                                    return result;
+                            }
                         }
 
-                        // Copy out the results
+                        // If we are using directional lightmaps, normalize them.
                         bool hasDirectionality = integratedRequestOutputType.Value.HasFlag(RequestedSubOutput.DirectionalityTexture);
                         if (hasDirectionality)
                         {
@@ -1263,6 +1287,11 @@ namespace UnityEditor.PathTracing.LightBakerBridge
                             switch (integratedOutputType)
                             {
                                 case IntegratedOutputType.Direct:
+                                    // If we have requested a direct directionality output based on shooting rays in the BRDF lobe, we postpone
+                                    // normalizing the directional lightmaps to later, since we must combine the directionality output from
+                                    // the 2 integrators before we can normalize.
+                                    if (integratedRequestOutputs.TryGetValue(IntegratedOutputType.DirectBRDF, out var subOutput) && subOutput.HasFlag(RequestedSubOutput.DirectionalityTexture))
+                                        break;
                                     lightmappingContext.IntegratorContext.LightmapDirectIntegrator.NormalizeDirectional(cmd, lightmappingContext.AccumulatedDirectionalOutput, accumulatedOutput, normalBuffer);
                                     break;
                                 case IntegratedOutputType.Indirect:
@@ -1271,6 +1300,7 @@ namespace UnityEditor.PathTracing.LightBakerBridge
                             }
                         }
 
+                        // Normalize main output.
                         switch (integratedOutputType)
                         {
                             case IntegratedOutputType.AO:
@@ -1278,6 +1308,9 @@ namespace UnityEditor.PathTracing.LightBakerBridge
                                 break;
                             case IntegratedOutputType.Direct:
                                 lightmappingContext.IntegratorContext.LightmapDirectIntegrator.Normalize(cmd, accumulatedOutput);
+                                break;
+                            case IntegratedOutputType.DirectBRDF:
+                                lightmappingContext.IntegratorContext.LightmapDirectBRDFIntegrator.Normalize(cmd, accumulatedOutput);
                                 break;
                             case IntegratedOutputType.Indirect:
                                 lightmappingContext.IntegratorContext.LightmapIndirectIntegrator.Normalize(cmd, accumulatedOutput);
@@ -1304,17 +1337,69 @@ namespace UnityEditor.PathTracing.LightBakerBridge
                         bool outputPrimaryTexture = integratedRequestOutputType.Value.HasFlag(RequestedSubOutput.PrimaryTexture);
                         // We explicitly take into account whether to write for directionality, no directionality or for both.
                         if (outputPrimaryTexture)
-                            if (LightmapIntegrationHelpers.WriteLightmap(cmd, accumulatedOutput, integratedOutputType, lightmapIndex, request.outputFolderPath) == false)
-                                return Result.WriteToDiskFailure;
+                        if (LightmapIntegrationHelpers.WriteLightmap(cmd, accumulatedOutput, integratedOutputType, lightmapIndex, request.outputFolderPath) == false)
+                            return Result.WriteToDiskFailure;
 
                         if (!integratedRequestOutputType.Value.HasFlag(RequestedSubOutput.DirectionalityTexture))
                             continue;
 
                         // Write 'direct/indirect directionality' if requested - it is baked in the same pass as 'direct/indirect'.
-                        IntegratedOutputType directionalityLightmapType =
-                            integratedOutputType == IntegratedOutputType.Direct ? IntegratedOutputType.DirectionalityDirect : IntegratedOutputType.DirectionalityIndirect;
+                        IntegratedOutputType directionalityLightmapType = IntegratedOutputType.DirectionalityDirect;
+                        switch (integratedOutputType)
+                        {
+                            case IntegratedOutputType.Direct: directionalityLightmapType = IntegratedOutputType.DirectionalityDirect; break;
+                            case IntegratedOutputType.DirectBRDF: directionalityLightmapType = IntegratedOutputType.DirectionalityDirectBRDF; break;
+                            case IntegratedOutputType.Indirect: directionalityLightmapType = IntegratedOutputType.DirectionalityIndirect; break;
+                            default: break;
+                        }
                         if (LightmapIntegrationHelpers.WriteLightmap(cmd, lightmappingContext.AccumulatedDirectionalOutput, directionalityLightmapType, lightmapIndex, request.outputFolderPath) == false)
                             return Result.WriteToDiskFailure;
+                    }
+
+                    // Combine contribution from direct BRDF integrator and main direct integrator.
+                    bool combineDirect = integratedRequestOutputs.ContainsKey(IntegratedOutputType.Direct) &&
+                                         integratedRequestOutputs.ContainsKey(IntegratedOutputType.DirectBRDF);
+
+                    // First combine primary textures.
+                    if (combineDirect &&
+                        integratedRequestOutputs[IntegratedOutputType.Direct].HasFlag(RequestedSubOutput.PrimaryTexture) &&
+                        integratedRequestOutputs[IntegratedOutputType.DirectBRDF].HasFlag(RequestedSubOutput.PrimaryTexture))
+                    {
+                        // Read direct irradiance textures, make a UAV from main direct irradiance texture.
+                        Texture2D direct = LightmapIntegrationHelpers.ReadLightmap(IntegratedOutputType.Direct, lightmapIndex, request.outputFolderPath);
+                        Texture2D directBRDF = LightmapIntegrationHelpers.ReadLightmap(IntegratedOutputType.DirectBRDF, lightmapIndex, request.outputFolderPath);
+
+                        RenderTexture tempDirectRT = RenderTexture.GetTemporary(new RenderTextureDescriptor(direct.width, direct.height, direct.graphicsFormat, 0) { enableRandomWrite = true });
+                        cmd.SetRenderTarget(tempDirectRT);
+                        cmd.ClearRenderTarget(true, true, Color.clear);
+                        lightmapResourceLib.ComputeHelpers.CopyTextureAdditive(cmd, direct, tempDirectRT, direct.width, direct.height);
+
+                        // Combine main direct irradiance texture with direct brdf irradiance texture, write out the result.
+                        lightmapResourceLib.ComputeHelpers.CopyTextureAdditive(cmd, directBRDF, tempDirectRT, direct.width, direct.height);
+                        lightmapResourceLib.ComputeHelpers.MaskAlphaChannel(cmd, tempDirectRT, direct.width, direct.height);
+                        LightmapIntegrationHelpers.WriteLightmap(cmd, tempDirectRT, IntegratedOutputType.Direct, lightmapIndex, request.outputFolderPath);
+                        RenderTexture.ReleaseTemporary(tempDirectRT);
+                    }
+
+                    // Then combine directionality textures.
+                    if (combineDirect &&
+                        integratedRequestOutputs[IntegratedOutputType.Direct].HasFlag(RequestedSubOutput.DirectionalityTexture) &&
+                        integratedRequestOutputs[IntegratedOutputType.DirectBRDF].HasFlag(RequestedSubOutput.DirectionalityTexture))
+                    {
+                        // Read direct directionality textures, make a UAV from main direct directionality texture. These are not yet normalized.
+                        Texture2D directionality = LightmapIntegrationHelpers.ReadLightmap(IntegratedOutputType.DirectionalityDirect, lightmapIndex, request.outputFolderPath);
+                        Texture2D directionalityBRDF = LightmapIntegrationHelpers.ReadLightmap(IntegratedOutputType.DirectionalityDirectBRDF, lightmapIndex, request.outputFolderPath);
+
+                        RenderTexture tempDirectionalRT = RenderTexture.GetTemporary(new RenderTextureDescriptor(directionality.width, directionality.height, directionality.graphicsFormat, 0) { enableRandomWrite = true });
+                        cmd.SetRenderTarget(tempDirectionalRT);
+                        cmd.ClearRenderTarget(true, true, Color.clear);
+                        lightmapResourceLib.ComputeHelpers.CopyTextureAdditive(cmd, directionality, tempDirectionalRT, directionality.width, directionality.height);
+
+                        // Combine with direct BRDF directionality texture, normalize and write out the result.
+                        lightmapResourceLib.ComputeHelpers.CopyTextureAdditive(cmd, directionalityBRDF, tempDirectionalRT, directionality.width, directionality.height);
+                        lightmappingContext.IntegratorContext.LightmapDirectIntegrator.NormalizeDirectional(cmd, tempDirectionalRT, tempDirectionalRT, normalBuffer);
+                        LightmapIntegrationHelpers.WriteLightmap(cmd, tempDirectionalRT, IntegratedOutputType.DirectionalityDirect, lightmapIndex, request.outputFolderPath);
+                        RenderTexture.ReleaseTemporary(tempDirectionalRT);
                     }
 
                     // Get rid of the normal output
@@ -1368,11 +1453,14 @@ namespace UnityEditor.PathTracing.LightBakerBridge
                     requestedLightmapTypes[lightmapType] |= type;
             }
 
+            List<IntegratedOutputType> integratedOutputTypes = new();
             foreach (var lightmapRequestOutputType in lightmapRequestOutputTypes)
             {
-                if (!LightmapRequestOutputTypeToIntegratedOutputType(lightmapRequestOutputType, out IntegratedOutputType lightmapType))
-                    continue;
+                LightmapRequestOutputTypeToIntegratedOutputType(lightmapRequestOutputType, integratedOutputTypes);
+            }
 
+            foreach (var lightmapType in integratedOutputTypes)
+            {
                 switch (lightmapType)
                 {
                     case IntegratedOutputType.Indirect:
@@ -1386,6 +1474,12 @@ namespace UnityEditor.PathTracing.LightBakerBridge
                         break;
                     case IntegratedOutputType.DirectionalityDirect:
                         AddToRequestedLightmapTypes(IntegratedOutputType.Direct, RequestedSubOutput.DirectionalityTexture);
+                        break;
+                    case IntegratedOutputType.DirectBRDF:
+                        AddToRequestedLightmapTypes(IntegratedOutputType.DirectBRDF, RequestedSubOutput.PrimaryTexture);
+                        break;
+                    case IntegratedOutputType.DirectionalityDirectBRDF:
+                        AddToRequestedLightmapTypes(IntegratedOutputType.DirectBRDF, RequestedSubOutput.DirectionalityTexture);
                         break;
                     default:
                         AddToRequestedLightmapTypes(lightmapType, RequestedSubOutput.PrimaryTexture);
@@ -1415,8 +1509,7 @@ namespace UnityEditor.PathTracing.LightBakerBridge
         }
 
         internal static bool ExecuteProbeRequests(in BakeInput bakeInput, in ProbeRequestData probeRequestData, UnityComputeDeviceContext deviceContext,
-            bool useLegacyBakingBehavior, UnityComputeWorld world, BakeProgressState progressState,
-            UnityEngine.Rendering.Sampling.SamplingResources samplingResources)
+            UnityComputeWorld world, BakeProgressState progressState, UnityEngine.Rendering.Sampling.SamplingResources samplingResources)
         {
             if (probeRequestData.requests.Length == 0)
                 return true;
@@ -1425,7 +1518,7 @@ namespace UnityEditor.PathTracing.LightBakerBridge
             integrationResources.Load(world.RayTracingContext);
 
             var probeOcclusionLightIndexMappingShader = UnityEditor.AssetDatabase.LoadAssetAtPath<ComputeShader>("Packages/com.unity.render-pipelines.core/Runtime/PathTracing/Shaders/ProbeOcclusionLightIndexMapping.compute");
-            using UnityComputeProbeIntegrator probeIntegrator = new(!useLegacyBakingBehavior, samplingResources, integrationResources, probeOcclusionLightIndexMappingShader);
+            using UnityComputeProbeIntegrator probeIntegrator = new(samplingResources, integrationResources, probeOcclusionLightIndexMappingShader);
             probeIntegrator.SetProgressReporter(progressState);
 
             // Create input position buffer
@@ -1455,6 +1548,12 @@ namespace UnityEditor.PathTracing.LightBakerBridge
                 (uint directSampleCount, uint effectiveIndirectSampleCount) = GetProbeSampleCounts(request.sampleCount);
 
                 probeIntegrator.Prepare(deviceContext, world, positionsBuffer.Slice<Vector3>(), pushoff, (int)bounceCount);
+                probeIntegrator.SetLightSamplingSettings(
+                    bakeInput.lightingSettings.directLightSamplingMode,
+                    bakeInput.lightingSettings.directRISCandidateCount,
+                    bakeInput.lightingSettings.indirectLightSamplingMode,
+                    bakeInput.lightingSettings.indirectRISCandidateCount,
+                    bakeInput.lightingSettings.indirectEmissiveSamplingMode);
 
                 List<EventID> eventsToWaitFor = new();
                 List<BufferID> buffersToDestroy = new();

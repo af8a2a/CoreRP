@@ -154,6 +154,7 @@ namespace UnityEngine.Rendering
                     accelStruct.AddInstance(EntityId.ToULong(renderer.component.GetEntityId()), renderer.component, maskAndMatDummy, maskAndMatDummy, perSubMeshOpaqueness, 1);
                 }
 
+#if ENABLE_TERRAIN_MODULE
                 foreach (var terrain in contributors.terrains)
                 {
                     int layerMask = 1 << terrain.component.gameObject.layer;
@@ -162,6 +163,7 @@ namespace UnityEngine.Rendering
 
                     accelStruct.AddInstance(EntityId.ToULong(terrain.component.GetEntityId()), terrain.component, new uint[1] { 0xFFFFFFFF }, new uint[1] { 0xFFFFFFFF }, new bool[1] { true }, 1);
                 }
+#endif
 
                 return accelStruct;
             }
@@ -356,7 +358,7 @@ namespace UnityEngine.Rendering
             if (ValidateBakingCellsSize(bakingCellsArray, chunkSizeInProbes, hasVirtualOffsets, hasRenderingLayers))
             {
                 // Write back the assets.
-                WriteBakingCells(bakingCellsArray);
+                WriteBakingCells(m_BakingSet, bakingCellsArray);
             }
 
             m_BakingBatch?.Dispose();

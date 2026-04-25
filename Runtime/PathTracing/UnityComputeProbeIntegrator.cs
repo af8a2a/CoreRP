@@ -15,8 +15,11 @@ namespace UnityEngine.PathTracing.Integration
         private readonly ProbeIntegrator _probeIntegrator;
         private UnityComputeWorld _world;
         private uint _bounceCount;
-        private uint _directLightingEvaluationCount;
-        private uint _numIndirectLightingEvaluations;
+        private LightSamplingMode _directLightSamplingMode = LightSamplingMode.RoundRobin;
+        private uint _directRISCandidateCount = 4;
+        private LightSamplingMode _indirectLightSamplingMode = LightSamplingMode.Uniform;
+        private EmissiveSamplingMode _indirectEmissiveSamplingMode = EmissiveSamplingMode.BRDFSampling;
+        private uint _indirectRISCandidateCount = 1;
         private uint _basePositionsOffset;
 
         private static class ShaderProperties
@@ -33,9 +36,9 @@ namespace UnityEngine.PathTracing.Integration
         private Rendering.Sampling.SamplingResources _samplingResources;
         private ProbeIntegratorResources _integrationResources;
 
-        public UnityComputeProbeIntegrator(bool countNEERayAsPathSegment, Rendering.Sampling.SamplingResources samplingResources, ProbeIntegratorResources integrationResources, ComputeShader probeOcclusionLightIndexMappingShader)
+        public UnityComputeProbeIntegrator(Rendering.Sampling.SamplingResources samplingResources, ProbeIntegratorResources integrationResources, ComputeShader probeOcclusionLightIndexMappingShader)
         {
-            _probeIntegrator = new ProbeIntegrator(countNEERayAsPathSegment);
+            _probeIntegrator = new ProbeIntegrator();
             _samplingResources = samplingResources;
             _probeOcclusionLightIndexMappingShader = probeOcclusionLightIndexMappingShader;
             _probeOcclusionLightIndexMappingKernel = _probeOcclusionLightIndexMappingShader.FindKernel("MapIndices");
@@ -66,7 +69,9 @@ namespace UnityEngine.PathTracing.Integration
                 (uint)positionCount,
                 sampleOffset,
                 (uint)sampleCount,
-                _directLightingEvaluationCount,
+                _directLightSamplingMode,
+                _directRISCandidateCount,
+                (uint)_world.PathTracingWorld.MaxLightsInAnyCell,
                 ignoreEnvironment,
                 unifiedContext.GetComputeBuffer(radianceEstimateOut.Id),
                 (uint)radianceEstimateOut.Offset,
@@ -96,7 +101,10 @@ namespace UnityEngine.PathTracing.Integration
                 _bounceCount,
                 sampleOffset,
                 (uint)sampleCount,
-                _numIndirectLightingEvaluations,
+                _indirectLightSamplingMode,
+                _indirectRISCandidateCount,
+                (uint)_world.PathTracingWorld.MaxLightsInAnyCell,
+                _indirectEmissiveSamplingMode,
                 ignoreEnvironment,
                 unifiedContext.GetComputeBuffer(radianceEstimateOut.Id),
                 (uint)radianceEstimateOut.Offset,
@@ -191,11 +199,28 @@ namespace UnityEngine.PathTracing.Integration
             return new IProbeIntegrator.Result(IProbeIntegrator.ResultType.Success, string.Empty);
         }
 
-        public void Prepare(IDeviceContext context, IWorld world, BufferSlice<Vector3> positions, float pushoff, int bounceCount)
+        public void SetLightSamplingSettings(
+            LightSamplingMode directLightSamplingMode,
+            uint directRISCandidateCount,
+            LightSamplingMode indirectLightSamplingMode,
+            uint indirectRISCandidateCount,
+            EmissiveSamplingMode indirectEmissiveSamplingMode)
+        {
+            _directLightSamplingMode = directLightSamplingMode;
+            _directRISCandidateCount = directRISCandidateCount;
+            _indirectLightSamplingMode = indirectLightSamplingMode;
+            _indirectRISCandidateCount = indirectRISCandidateCount;
+            _indirectEmissiveSamplingMode = indirectEmissiveSamplingMode;
+        }
+
+        public void Prepare(
+            IDeviceContext context,
+            IWorld world,
+            BufferSlice<Vector3> positions,
+            float pushoff,
+            int bounceCount)
         {
             _bounceCount = (uint)bounceCount;
-            _directLightingEvaluationCount = 4;
-            _numIndirectLightingEvaluations = 1;
 
             _world = world as UnityComputeWorld;
             Debug.Assert(world != null);

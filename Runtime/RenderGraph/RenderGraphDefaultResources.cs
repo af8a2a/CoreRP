@@ -63,7 +63,8 @@ namespace UnityEngine.Rendering.RenderGraphModule
             }
 
             if (m_ShadowTextureArray2D == null)
-                m_ShadowTextureArray2D = RTHandles.Alloc(1, 1, slices: 1, depthBufferBits: DepthBits.Depth32, dimension: TextureDimension.Tex2DArray, isShadowMap: true, name: "DefaultShadowTextureArray");
+                m_ShadowTextureArray2D = RTHandles.Alloc(1, 1, dimension: TextureDimension.Tex2DArray, depthBufferBits: DepthBits.Depth32, isShadowMap: true,
+                    name: "DefaultShadowArrayTexture");
         }
 
         internal void Cleanup()

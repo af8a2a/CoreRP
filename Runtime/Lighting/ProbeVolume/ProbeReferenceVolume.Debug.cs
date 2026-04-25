@@ -1,3 +1,7 @@
+#if DEVELOPMENT_BUILD || UNITY_EDITOR
+#define PROBEREFERENCEVOLUME_DEBUG
+#endif
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -113,6 +117,15 @@ namespace UnityEngine.Rendering
 
         static internal int s_ActiveAdjustmentVolumes = 0;
 
+#if UNITY_EDITOR
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterAssembliesLoaded)]
+        static void ResetStaticsOnLoad()
+        {
+            currentOffset = Vector3.zero;
+            s_ActiveAdjustmentVolumes = 0;
+        }
+#endif
+
         public ProbeVolumeDebug()
         {
             Init();
@@ -162,12 +175,12 @@ namespace UnityEngine.Rendering
         internal static Func<Color> GetSparseSubdivisionColor;
         internal static Func<Color> GetSparsestSubdivisionColor;
 
-        internal static Color s_DetailSubdivision   = new Color32(135, 35,  255, 255);
-        internal static Color s_MediumSubdivision   = new Color32(54,  208, 228, 255);
-        internal static Color s_LowSubdivision      = new Color32(255, 100, 45,  255);
-        internal static Color s_VeryLowSubdivision  = new Color32(52,  87,  255, 255);
-        internal static Color s_SparseSubdivision   = new Color32(255, 71,  97,  255);
-        internal static Color s_SparsestSubdivision = new Color32(200, 227, 39,  255);
+        internal static readonly Color s_DetailSubdivision   = new Color32(135, 35,  255, 255);
+        internal static readonly Color s_MediumSubdivision   = new Color32(54,  208, 228, 255);
+        internal static readonly Color s_LowSubdivision      = new Color32(255, 100, 45,  255);
+        internal static readonly Color s_VeryLowSubdivision  = new Color32(52,  87,  255, 255);
+        internal static readonly Color s_SparseSubdivision   = new Color32(255, 71,  97,  255);
+        internal static readonly Color s_SparsestSubdivision = new Color32(200, 227, 39,  255);
 
         static ProbeVolumeDebugColorPreferences()
         {
@@ -196,7 +209,7 @@ namespace UnityEngine.Rendering
         /// <summary>Name of debug panel for Probe Volume</summary>
         public static readonly string k_DebugPanelName = "Probe Volumes";
 
-        internal ProbeVolumeDebug probeVolumeDebug { get; private set; }
+        internal ProbeVolumeDebug probeVolumeDebug { get; private set; } = new ProbeVolumeDebug();
 
         /// <summary>Colors that can be used for debug visualization of the brick structure subdivision.</summary>
         public Color[] subdivisionDebugColors { get; } = new Color[ProbeBrickIndex.kMaxSubdivisionLevels];
@@ -261,6 +274,7 @@ namespace UnityEngine.Rendering
         /// <param name="exposureTexture">Texture containing the exposure value for this frame.</param>
         public void RenderDebug(Camera camera, ProbeVolumesOptions options, Texture exposureTexture)
         {
+#if PROBEREFERENCEVOLUME_DEBUG
             if (camera.cameraType != CameraType.Reflection && camera.cameraType != CameraType.Preview)
             {
                 if (options != null)
@@ -268,6 +282,7 @@ namespace UnityEngine.Rendering
 
                 DrawProbeDebug(camera, exposureTexture);
             }
+#endif
         }
 
         /// <summary>
@@ -360,6 +375,7 @@ namespace UnityEngine.Rendering
         }
 #endif
 
+#if PROBEREFERENCEVOLUME_DEBUG
         bool TryCreateDebugRenderData()
         {
             if (!GraphicsSettings.TryGetRenderPipelineSettings<ProbeVolumeDebugResources>(out var debugResources))
@@ -436,11 +452,6 @@ namespace UnityEngine.Rendering
 #endif
         }
 
-        void DebugCellIndexChanged<T>(DebugUI.Field<T> field, T value)
-        {
-            ClearDebugData();
-        }
-
         void RegisterDebug()
         {
             void RefreshDebug<T>(DebugUI.Field<T> field, T value)
@@ -455,6 +466,15 @@ namespace UnityEngine.Rendering
             var widgetList = new List<DebugUI.Widget>();
 
             widgetList.Add(new DebugUI.RuntimeDebugShadersMessageBox());
+
+#if !UNITY_EDITOR
+            widgetList.Add(new DebugUI.MessageBox
+            {
+                displayName = "Warning: Probe Volume debugging is not supported in the Player.",
+                style = DebugUI.MessageBox.Style.Warning,
+                flags = DebugUI.Flags.RuntimeOnly
+            });
+#endif
 
             var subdivContainer = new DebugUI.Container()
             {
@@ -807,6 +827,8 @@ namespace UnityEngine.Rendering
                 DebugManager.instance.GetPanel(k_DebugPanelName, false).children.Remove(m_DebugItems);
         }
 
+#endif // PROBEREFERENCEVOLUME_DEBUG
+
         class RenderFragmentationOverlayPassData
         {
             public Material debugFragmentationMaterial;
@@ -856,6 +878,7 @@ namespace UnityEngine.Rendering
             }
         }
 
+#if PROBEREFERENCEVOLUME_DEBUG
         bool ShouldCullCell(Vector3 cellPosition, Transform cameraTransform, Plane[] frustumPlanes)
         {
             var volumeAABB = GetCellBounds(cellPosition);
@@ -1056,7 +1079,7 @@ namespace UnityEngine.Rendering
                         var probeBuffer = debug.probeBuffers[i];
                         m_DebugMaterial.SetInt("_DebugProbeVolumeSampling", 0);
                         m_DebugMaterial.SetBuffer("_positionNormalBuffer", probeSamplingDebugData.positionNormalBuffer);
-                        Graphics.DrawMeshInstanced(debugMesh, 0, m_DebugMaterial, probeBuffer, probeBuffer.Length, props, ShadowCastingMode.Off, false, 0, camera, LightProbeUsage.Off, null);
+                        Graphics.DrawMeshInstanced(debugMesh, 0, m_DebugMaterial, probeBuffer, probeBuffer.Length, props, ShadowCastingMode.Off, false, 0, camera, LightProbeUsage.Off);
                     }
 
                     if (probeVolumeDebug.drawProbeSamplingDebug)
@@ -1068,7 +1091,7 @@ namespace UnityEngine.Rendering
                         props.SetInt("_DebugSamplingNoise", Convert.ToInt32(probeVolumeDebug.debugWithSamplingNoise));
                         props.SetInt("_RenderingLayerMask", (int)probeVolumeDebug.samplingRenderingLayer);
                         m_ProbeSamplingDebugMaterial02.SetBuffer("_positionNormalBuffer", probeSamplingDebugData.positionNormalBuffer);
-                        Graphics.DrawMeshInstanced(debugMesh, 0, m_ProbeSamplingDebugMaterial02, probeBuffer, probeBuffer.Length, props, ShadowCastingMode.Off, false, 0, camera, LightProbeUsage.Off, null);
+                        Graphics.DrawMeshInstanced(debugMesh, 0, m_ProbeSamplingDebugMaterial02, probeBuffer, probeBuffer.Length, props, ShadowCastingMode.Off, false, 0, camera, LightProbeUsage.Off);
                     }
 
                     if (probeVolumeDebug.drawVirtualOffsetPush)
@@ -1077,11 +1100,12 @@ namespace UnityEngine.Rendering
                         m_DebugOffsetMaterial.SetInt("_AdjustmentVolumeCount", probeVolumeDebug.isolationProbeDebug ? adjustmentVolumeCount : 0);
 
                         var offsetBuffer = debug.offsetBuffers[i];
-                        Graphics.DrawMeshInstanced(m_DebugOffsetMesh, 0, m_DebugOffsetMaterial, offsetBuffer, offsetBuffer.Length, props, ShadowCastingMode.Off, false, 0, camera, LightProbeUsage.Off, null);
+                        Graphics.DrawMeshInstanced(m_DebugOffsetMesh, 0, m_DebugOffsetMaterial, offsetBuffer, offsetBuffer.Length, props, ShadowCastingMode.Off, false, 0, camera, LightProbeUsage.Off);
                     }
                 }
             }
         }
+#endif // PROBEREFERENCEVOLUME_DEBUG
 
         internal void ResetDebugViewToMaxSubdiv()
         {

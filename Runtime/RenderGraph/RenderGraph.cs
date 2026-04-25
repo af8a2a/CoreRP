@@ -62,6 +62,11 @@ namespace UnityEngine.Rendering.RenderGraphModule
         MultiviewRenderRegionsCompatible = 1 << 1,
         ///<summary>On Meta XR, this flag can be set to use MSAA shader resolve in the last subpass of a render pass. </summary>
         MultisampledShaderResolve = 1 << 2,
+        /// <summary>
+        /// Indicates this pass uses depth texture as both input attachment(framebuffer fetch) and depth attachment.
+        /// Required before calling SetInputAttachment() with a depth texture.
+        /// </summary>
+        DepthAttachmentAsInputAttachment = 1 << 3,
     }
 
     [Flags]
@@ -501,7 +506,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
 
         internal List<DebugUI.Widget> GetWidgetList()
         {
-            return m_DebugParameters.GetWidgetList(name);
+            return m_DebugParameters.GetWidgetList();
         }
 
         internal bool areAnySettingsActive => m_DebugParameters.AreAnySettingsActive;
@@ -1438,7 +1443,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
         // Internal for testing purpose only.
         internal int ComputeGraphHash()
         {
-            using (new ProfilingScope(ProfilingSampler.Get(RenderGraphProfileId.ComputeHashRenderGraph)))
+            using (RenderGraphProfilerMarkers.ComputeHashRenderGraph.Auto())
             {
                 var hash128 = HashFNV1A32.Create();
                 for (int i = 0; i < m_RenderPasses.Count; ++i)

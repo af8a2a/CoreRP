@@ -35,7 +35,6 @@ namespace UnityEngine.PathTracing.Core
             public static readonly int EnvTex = Shader.PropertyToID("g_EnvTex");
             public static readonly int LightEvaluations = Shader.PropertyToID("g_LightEvaluations");
             public static readonly int PathtracerAsGiPreviewMode = Shader.PropertyToID("g_PathtracerAsGiPreviewMode");
-            public static readonly int CountNEERayAsPathSegment = Shader.PropertyToID("g_CountNEERayAsPathSegment");
             public static readonly int RenderedInstances = Shader.PropertyToID("g_RenderedInstances");
             public static readonly int PreExpose = Shader.PropertyToID("g_PreExpose");
             public static readonly int BounceCount = Shader.PropertyToID("g_BounceCount");
@@ -128,8 +127,7 @@ namespace UnityEngine.PathTracing.Core
         static internal void BindPathTracingInputs(
             CommandBuffer cmd,
             IRayTracingShader shader,
-            bool countNEERayAsPathSegment,
-            uint lightEvaluationsPerBounce,
+            uint risCandidateCount,
             bool preExpose,
             int bounces,
             float environmentIntensityMultiplier,
@@ -137,9 +135,8 @@ namespace UnityEngine.PathTracing.Core
             SamplingResources samplingResources,
             RTHandle emptyTexture)
         {
-            shader.SetIntParam(cmd, ShaderProperties.LightEvaluations, (int)lightEvaluationsPerBounce);
+            shader.SetIntParam(cmd, ShaderProperties.LightEvaluations, (int)risCandidateCount);
             shader.SetIntParam(cmd, ShaderProperties.PathtracerAsGiPreviewMode, 0);
-            shader.SetIntParam(cmd, ShaderProperties.CountNEERayAsPathSegment, countNEERayAsPathSegment ? 1 : 0);
             shader.SetIntParam(cmd, ShaderProperties.RenderedInstances, (int)renderedGameObjectsFilter);
             shader.SetIntParam(cmd, ShaderProperties.PreExpose, preExpose ? 1 : 0);
             shader.SetIntParam(cmd, ShaderProperties.BounceCount, bounces);
@@ -158,6 +155,19 @@ namespace UnityEngine.PathTracing.Core
             }
         }
 
+        internal static void SetLightSamplingKeyword(CommandBuffer cmd, IRayTracingShader shader, LightSamplingMode lightSamplingMode)
+        {
+            shader.SetKeyword(cmd, shader.CreateLocalKeyword("LIGHT_SAMPLING_UNIFORM"), lightSamplingMode == LightSamplingMode.Uniform);
+            shader.SetKeyword(cmd, shader.CreateLocalKeyword("LIGHT_SAMPLING_RIS"), lightSamplingMode == LightSamplingMode.RIS);
+            shader.SetKeyword(cmd, shader.CreateLocalKeyword("LIGHT_SAMPLING_ROUND_ROBIN"), lightSamplingMode == LightSamplingMode.RoundRobin);
+        }
+
+        internal static void SetEmissiveSamplingKeyword(CommandBuffer cmd, IRayTracingShader shader, EmissiveSamplingMode lightSamplingMode)
+        {
+            shader.SetKeyword(cmd, shader.CreateLocalKeyword("EMISSIVE_SAMPLING_LIGHT"), lightSamplingMode == EmissiveSamplingMode.LightSampling);
+            shader.SetKeyword(cmd, shader.CreateLocalKeyword("EMISSIVE_SAMPLING_BRDF"), lightSamplingMode == EmissiveSamplingMode.BRDFSampling);
+            shader.SetKeyword(cmd, shader.CreateLocalKeyword("EMISSIVE_SAMPLING_MIS"), lightSamplingMode == EmissiveSamplingMode.MIS);
+        }
 
         internal static RayTracingResources LoadOrCreateRayTracingResources()
         {
@@ -187,7 +197,7 @@ namespace UnityEngine.PathTracing.Core
 
         internal static bool IsPunctualLightType(LightType lightType)
         {
-            return lightType == LightType.Directional || lightType == LightType.Spot || lightType == LightType.Point || lightType == LightType.Box;
+            return lightType == LightType.Directional || lightType == LightType.Spot || lightType == LightType.Point || lightType == LightType.Box || lightType == LightType.Pyramid;
         }
 
         // Our old baker, LightBaker, multiplied intensities of punctual lights by PI. This isn't quite correct, but it was never changed as it would be breaking.
@@ -235,7 +245,13 @@ namespace UnityEngine.PathTracing.Core
 
         internal static Vector3 GetLinearLightColor(Light light)
         {
-            Color lightColor = (GraphicsSettings.lightsUseLinearIntensity) ? RGBMultiplied(light.color.linear, light.intensity) : RGBMultiplied(light.color, light.intensity).linear;
+            return GetLinearLightColor(light, 1.0f);
+        }
+
+        internal static Vector3 GetLinearLightColor(Light light, float intensityMultiplier)
+        {
+            float effectiveIntensity = light.intensity * intensityMultiplier;
+            Color lightColor = (GraphicsSettings.lightsUseLinearIntensity) ? RGBMultiplied(light.color.linear, effectiveIntensity) : RGBMultiplied(light.color, effectiveIntensity).linear;
             lightColor *= light.useColorTemperature ? Mathf.CorrelatedColorTemperatureToRGB(light.colorTemperature) : Color.white;
             return new Vector3(lightColor.r, lightColor.g, lightColor.b) * lightColor.a;
         }
@@ -261,9 +277,7 @@ namespace UnityEngine.PathTracing.Core
 
         internal static ulong EntityIDToUlong(EntityId id)
         {
-            Debug.Assert(UnsafeUtility.SizeOf<EntityId>() == sizeof(int),
-                "If this assert is firing, the size of EntityId has changed. Remove the intermediate cast to int below, and cast directly to ulong instead.");
-
+            Debug.Assert(UnsafeUtility.SizeOf<EntityId>() == sizeof(ulong), "EntityId should be 8 bytes");
             return EntityId.ToULong(id);
         }
     }

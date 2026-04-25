@@ -1,5 +1,8 @@
 using System;
 using Unity.Mathematics;
+using Unity.Profiling;
+using Unity.Profiling.LowLevel;
+using UnityEngine.PathTracing.Core;
 using UnityEngine.PathTracing.Integration;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.UnifiedRayTracing;
@@ -8,6 +11,14 @@ namespace UnityEngine.PathTracing.Lightmapping
 {
     internal static class BakeLightmapDriver
     {
+        /// <summary>
+        /// Profiles a single per-instance lightmap accumulation step, spanning GBuffer sampling,
+        /// path-tracing dispatch, and all output integrators (direct, indirect, AO, validity, shadow mask).
+        /// </summary>
+        static readonly ProfilerMarker k_AccumulateLightmapInstance =
+            new ProfilerMarker(ProfilerCategory.Render, "AccumulateLightmapInstance",
+                MarkerFlags.Default | MarkerFlags.SampleGPU);
+
         public class LightmapBakeState
         {
             public uint SampleIndex;
@@ -60,6 +71,7 @@ namespace UnityEngine.PathTracing.Lightmapping
         {
             public uint AOSampleCount = 32;
             public uint DirectSampleCount = 32;
+            public uint DirectBRDFSampleCount = 32;
             public uint IndirectSampleCount = 512;
             public uint ValiditySampleCount = 512;
 
@@ -69,18 +81,26 @@ namespace UnityEngine.PathTracing.Lightmapping
             public AntiAliasingType ValidityAntiAliasingType = AntiAliasingType.Stochastic;
 
             public uint BounceCount = 4;
-            public uint DirectLightingEvaluationCount = 4;
-            public uint IndirectLightingEvaluationCount = 1;
             public float AOMaxDistance = 1.0f;
             public float PushOff = 0.00001f;
             public UInt64 ExpandedBufferSize = 262144;
+
+            public LightSamplingMode DirectLightSamplingMode;
+            public uint DirectRISCandidateCount;
+            public LightSamplingMode IndirectLightSamplingMode;
+            public uint IndirectRISCandidateCount;
+            public EmissiveSamplingMode DirectEmissiveSamplingMode;
+            public EmissiveSamplingMode IndirectEmissiveSamplingMode;
+
             public uint GetSampleCount(IntegratedOutputType integratedOutputType)
             {
                 switch (integratedOutputType)
                 {
                     case IntegratedOutputType.AO: return AOSampleCount;
                     case IntegratedOutputType.Direct: return DirectSampleCount;
+                    case IntegratedOutputType.DirectBRDF: return DirectBRDFSampleCount;
                     case IntegratedOutputType.DirectionalityDirect: return DirectSampleCount;
+                    case IntegratedOutputType.DirectionalityDirectBRDF: return DirectBRDFSampleCount;
                     case IntegratedOutputType.Indirect: return IndirectSampleCount;
                     case IntegratedOutputType.DirectionalityIndirect: return IndirectSampleCount;
                     case IntegratedOutputType.Validity: return ValiditySampleCount;
@@ -97,7 +117,9 @@ namespace UnityEngine.PathTracing.Lightmapping
                 {
                     case IntegratedOutputType.AO: return AOAntiAliasingType;
                     case IntegratedOutputType.Direct: return DirectAntiAliasingType;
+                    case IntegratedOutputType.DirectBRDF: return DirectAntiAliasingType;
                     case IntegratedOutputType.DirectionalityDirect: return DirectAntiAliasingType;
+                    case IntegratedOutputType.DirectionalityDirectBRDF: return DirectAntiAliasingType;
                     case IntegratedOutputType.Indirect: return IndirectAntiAliasingType;
                     case IntegratedOutputType.DirectionalityIndirect: return IndirectAntiAliasingType;
                     case IntegratedOutputType.Validity: return ValidityAntiAliasingType;
@@ -253,12 +275,12 @@ namespace UnityEngine.PathTracing.Lightmapping
                     string sampleOutput = new("");
                     foreach (var sample in uvSampleData)
                         sampleOutput += string.Format(System.Globalization.CultureInfo.InvariantCulture, "float2({0}, {1})\n", sample.x, sample.y);
-                    
+
                     System.Console.WriteLine(sampleOutput);
                 }
 
                 // accumulate the lightmap texel
-                cmd.BeginSample("AccumulateLightmapInstance");
+                cmd.BeginSample(k_AccumulateLightmapInstance);
 
                 switch (integratedOutputType)
                 {
@@ -331,7 +353,36 @@ namespace UnityEngine.PathTracing.Lightmapping
                             lightmappingContext.IntegratorContext.CompactedGBufferLength,
                             instance.ReceiveShadows,
                             lightmapBakeSettings.PushOff,
-                            lightmapBakeSettings.DirectLightingEvaluationCount,
+                            lightmapBakeSettings.DirectRISCandidateCount,
+                            lightmapBakeSettings.DirectLightSamplingMode,
+                            (uint)lightmappingContext.World.PathTracingWorld.MaxLightsInAnyCell,
+                            newChunkStarted
+                        );
+                        break;
+                    }
+                    case IntegratedOutputType.DirectBRDF:
+                    case IntegratedOutputType.DirectionalityDirectBRDF:
+                    {
+                        lightmappingContext.IntegratorContext.LightmapDirectBRDFIntegrator.Accumulate(
+                            cmd,
+                            passSampleCount,
+                            bakeState.SampleIndex,
+                            instance.LocalToWorldMatrix,
+                            instance.LocalToWorldMatrixNormals,
+                            instanceGeometryIndex,
+                            instance.TexelSize,
+                            chunkOffset,
+                            lightmappingContext.World.PathTracingWorld,
+                            traceScratchBuffer,
+                            lightmappingContext.GBuffer,
+                            expandedSampleWidth,
+                            lightmappingContext.ExpandedOutput,
+                            expandedDirectional,
+                            lightmappingContext.CompactedTexelIndices,
+                            lightmappingContext.IntegratorContext.CompactedGBufferLength,
+                            instance.ReceiveShadows,
+                            lightmapBakeSettings.PushOff,
+                            lightmapBakeSettings.DirectRISCandidateCount,
                             newChunkStarted
                         );
                         break;
@@ -358,7 +409,7 @@ namespace UnityEngine.PathTracing.Lightmapping
                             lightmappingContext.CompactedTexelIndices,
                             lightmappingContext.IntegratorContext.CompactedGBufferLength,
                             lightmapBakeSettings.PushOff,
-                            lightmapBakeSettings.IndirectLightingEvaluationCount,
+                            lightmapBakeSettings.IndirectRISCandidateCount,
                             newChunkStarted
                         );
                         break;
@@ -384,13 +435,12 @@ namespace UnityEngine.PathTracing.Lightmapping
                             lightmappingContext.IntegratorContext.CompactedGBufferLength,
                             instance.ReceiveShadows,
                             lightmapBakeSettings.PushOff,
-                            lightmapBakeSettings.DirectLightingEvaluationCount,
                             newChunkStarted
                         );
                         break;
                     }
                 }
-                cmd.EndSample("AccumulateLightmapInstance");
+                cmd.EndSample(k_AccumulateLightmapInstance);
 
                 //LightmapIntegrationHelpers.LogGraphicsBuffer(cmd, lightmappingContext.ExpandedOutput, "expandedOutput", LightmapIntegrationHelpers.LogBufferType.Float4);
 

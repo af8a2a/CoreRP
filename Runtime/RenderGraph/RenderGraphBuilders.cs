@@ -75,6 +75,45 @@ namespace UnityEngine.Rendering.RenderGraphModule
 #endif            
         }
 
+        [Conditional("DEVELOPMENT_BUILD"), Conditional("UNITY_EDITOR")]
+        private void CheckInputAttachment(int index, bool isDepth)
+        {
+            if (RenderGraph.enableValidityChecks)
+            {
+                if (isDepth)
+                {
+                    // Check ExtendedFeatureFlags
+                    if (!m_RenderPass.extendedFeatureFlags.HasFlag(ExtendedFeatureFlags.DepthAttachmentAsInputAttachment))
+                    {
+                        throw new InvalidOperationException(
+                            RenderGraphExceptionMessages.DepthInputAttachmentNotEnabled(m_RenderPass.name));
+                    }
+
+                    // Check Systeminfo
+                    if (!SystemInfo.supportsDepthAttachmentAsInputAttachment)
+                    {
+                        throw new InvalidOperationException(
+                            RenderGraphExceptionMessages.DepthInputAttachmentNotSupported(m_RenderPass.name));
+                    }
+
+                    // Check Index.
+                    if (index != 0)
+                    {
+                        throw new InvalidOperationException(
+                            RenderGraphExceptionMessages.DepthInputAttachmentWithInvalidIndex(m_RenderPass.name));
+                    }
+                }
+                else
+                {
+                    // Check invalid input attachment use case for color
+                    if (m_RenderPass.extendedFeatureFlags.HasFlag(ExtendedFeatureFlags.DepthAttachmentAsInputAttachment) && index == 0)
+                    {
+                        throw new InvalidOperationException(
+                            RenderGraphExceptionMessages.DepthInputAttachmentWithColorFormat(m_RenderPass.name));
+                    }
+                }
+            }
+        }
 
         public void EnableAsyncCompute(bool value)
         {
@@ -531,7 +570,18 @@ namespace UnityEngine.Rendering.RenderGraphModule
 
             CheckFrameBufferFetchEmulationIsSupported(tex);
 
-            CheckUseFragment(tex, false);
+            m_Resources.GetRenderTargetInfo(tex.handle, out var info);
+            if (GraphicsFormatUtility.IsDepthFormat(info.format))
+            {
+                CheckInputAttachment(index, true);
+                CheckUseFragment(tex, true);
+            }
+            else
+            {
+                CheckInputAttachment(index, false);
+                CheckUseFragment(tex, false);
+            }
+
             var versionedTextureHandle = new TextureHandle(UseResource(tex.handle, flags));
             m_RenderPass.SetFragmentInputRaw(versionedTextureHandle, index, flags, mipLevel, depthSlice);
         }

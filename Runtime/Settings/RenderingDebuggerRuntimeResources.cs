@@ -32,7 +32,7 @@ namespace UnityEngine.Rendering
         [SerializeField, ResourcePath("Runtime/Debugging/Runtime UI Resources/RuntimeDebugWindow_PanelSettings.asset")]
         private PanelSettings m_PanelSettings;
 
-        /// <summary>StyleSheet for the Rendering Debugger Runtime UI</summary>
+        /// <summary>Panel Settings Asset for the Rendering Debugger Runtime UI</summary>
         public PanelSettings panelSettings
         {
             get => m_PanelSettings;

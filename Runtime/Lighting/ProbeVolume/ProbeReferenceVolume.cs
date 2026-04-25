@@ -1,26 +1,26 @@
-using System;
-using System.Diagnostics;
-using System.Collections.Generic;
-using System.Reflection;
-using UnityEngine.Profiling;
-using UnityEngine.SceneManagement;
-using Chunk = UnityEngine.Rendering.ProbeBrickPool.BrickChunkAlloc;
-using Brick = UnityEngine.Rendering.ProbeBrickIndex.Brick;
-using Unity.Collections;
-using Unity.Profiling;
-using Unity.Mathematics;
-using UnityEngine.Experimental.Rendering;
-
-#if UNITY_EDITOR
-using System.Linq.Expressions;
-using UnityEditor;
+#if DEVELOPMENT_BUILD || UNITY_EDITOR
+#define PROBEREFERENCEVOLUME_DEBUG
 #endif
+
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Reflection;
+using Unity.Collections;
+using Unity.Mathematics;
+using Unity.Profiling;
+using Unity.Profiling.LowLevel;
+using UnityEngine.Experimental.Rendering;
+using UnityEngine.SceneManagement;
+using Brick = UnityEngine.Rendering.ProbeBrickIndex.Brick;
+using Chunk = UnityEngine.Rendering.ProbeBrickPool.BrickChunkAlloc;
 
 namespace UnityEngine.Rendering
 {
     internal static class SceneExtensions
     {
-        static PropertyInfo s_SceneGUID = typeof(Scene).GetProperty("guid", BindingFlags.NonPublic | BindingFlags.Instance);
+        static readonly PropertyInfo s_SceneGUID = typeof(Scene).GetProperty("guid", BindingFlags.NonPublic | BindingFlags.Instance);
+
         public static string GetGUID(this Scene scene)
         {
             Debug.Assert(s_SceneGUID != null, "Reflection for scene GUID failed");
@@ -789,6 +789,16 @@ namespace UnityEngine.Rendering
 
         int m_CBShaderID = Shader.PropertyToID("ShaderVariablesProbeVolumes");
 
+        /// <summary>
+        /// Performs a one-time initialization that allocates the brick pool, blending pool, brick
+        /// index (plus defrag index when GPU streaming is enabled), global indirection textures,
+        /// and the intermediate data location. Cost depends on memory budget and enabled
+        /// features (L2, sky occlusion, rendering layers).
+        /// </summary>
+        static readonly ProfilerMarker k_InitializeReferenceVolume =
+            new ProfilerMarker(ProfilerCategory.Render, "Initialize Reference Volume",
+                MarkerFlags.VerbosityAdvanced);
+
         ProbeVolumeTextureMemoryBudget m_MemoryBudget;
         ProbeVolumeBlendingTextureMemoryBudget m_BlendingMemoryBudget;
         ProbeVolumeSHBands m_SHBands;
@@ -846,7 +856,7 @@ namespace UnityEngine.Rendering
                 m_CurrentBakingSet.BlendLightingScenario(otherScenario, blendingFactor);
         }
 
-        internal static string defaultLightingScenario = "Default";
+        internal static readonly string defaultLightingScenario = "Default";
 
         /// <summary>
         /// Get the memory budget for the Probe Volume system.
@@ -854,6 +864,19 @@ namespace UnityEngine.Rendering
         public ProbeVolumeTextureMemoryBudget memoryBudget => m_MemoryBudget;
 
         static ProbeReferenceVolume s_Instance = new ProbeReferenceVolume();
+
+#if UNITY_EDITOR
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterAssembliesLoaded)]
+        static void ResetStaticsOnLoad()
+        {
+            s_Instance = new ProbeReferenceVolume();
+            // From ProbeReferenceVolume.Debug.cs
+            probeSamplingDebugData = new ProbeSamplingDebugData();
+#if PROBEREFERENCEVOLUME_DEBUG
+            Array.Clear(s_BoundsArray, 0, s_BoundsArray.Length);
+#endif
+        }
+#endif
 
         internal List<ProbeVolumePerSceneData> perSceneDataList { get; private set; } = new List<ProbeVolumePerSceneData>();
 
@@ -1045,7 +1068,9 @@ namespace UnityEngine.Rendering
             // For now this condition is redundant with m_SupportDiskStreaming but we plan to support disk streaming without compute in the future.
             // So we need to split the conditions to plan for that.
             m_DiskStreamingUseCompute = SystemInfo.supportsComputeShaders && streamingUploadCS != null && streamingUploadL2CS != null;
+#if PROBEREFERENCEVOLUME_DEBUG
             InitializeDebug();
+#endif
             ProbeVolumeConstantRuntimeResources.Initialize();
             ProbeBrickPool.Initialize();
             ProbeBrickBlendingPool.Initialize();
@@ -1131,7 +1156,9 @@ namespace UnityEngine.Rendering
             }
 
             CleanupLoadedData();
+#if PROBEREFERENCEVOLUME_DEBUG
             CleanupDebug();
+#endif
             CleanupStreaming();
             DeinitProbeReferenceVolume();
             m_IsInitialized = false;
@@ -1447,11 +1474,13 @@ namespace UnityEngine.Rendering
             }
 
             // Remove bricks and empty cells
-            foreach (var cellIndex in cellList)
+            if (cellList != null)
             {
-                RemoveCell(cellIndex);
+                foreach (var cellIndex in cellList)
+                {
+                    RemoveCell(cellIndex);
+                }
             }
-
             ClearDebugData();
             ComputeCellGlobalInfo();
         }
@@ -1644,7 +1673,8 @@ namespace UnityEngine.Rendering
 
             if (!m_ProbeReferenceVolumeInit)
             {
-                Profiler.BeginSample("Initialize Reference Volume");
+                using var _ = k_InitializeReferenceVolume.Auto();
+
                 m_Pool = new ProbeBrickPool(m_MemoryBudget, m_SHBands, allocateValidityData: true, useRenderingLayers, skyOcclusion, skyOcclusionShadingDirection, probeOcclusion);
                 m_BlendingPool = new ProbeBrickBlendingPool(m_BlendingMemoryBudget, m_SHBands, probeOcclusion);
 
@@ -1667,21 +1697,20 @@ namespace UnityEngine.Rendering
                     m_PositionOffsets[i] = i * probeDelta;
                 m_PositionOffsets[m_PositionOffsets.Length - 1] = 1.0f;
 
-                Profiler.EndSample();
-
                 m_ProbeReferenceVolumeInit = true;
 
                 ClearDebugData();
 
                 m_NeedLoadAsset = true;
             }
-
+#if PROBEREFERENCEVOLUME_DEBUG
             // Refresh debug menu
             if (DebugManager.instance.GetPanel(k_DebugPanelName, false) != null)
             {
                 instance.UnregisterDebug(false);
                 instance.RegisterDebug();
             }
+#endif
         }
 
         ProbeReferenceVolume()

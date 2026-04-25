@@ -12,13 +12,18 @@ namespace UnityEngine.Rendering.LiveGI
     internal class SceneChanges
     {
         public List<MeshRenderer> addedMeshRenderers;
-        public List<MeshRendererInstanceChanges> changedMeshRenderers;
+        public List<MeshRendererChanges> changedMeshRenderers;
         public List<EntityId> removedMeshRenderers;
 
+#if ENABLE_TERRAIN_MODULE
         public List<Terrain> addedTerrains;
-        public List<TerrainInstanceChanges> changedTerrains;
+        public List<TerrainChanges> changedTerrains;
         public List<EntityId> removedTerrains;
-        public List<TerrainData> changedTerrainData;
+
+        public List<TerrainData> addedTerrainData;
+        public List<TerrainDataChanges> changedTerrainData;
+        public List<EntityId> removedTerrainData;
+#endif
 
         public List<Material> addedMaterials;
         public List<EntityId> removedMaterials;
@@ -31,12 +36,18 @@ namespace UnityEngine.Rendering.LiveGI
         public SceneChanges()
         {
             addedMeshRenderers = new List<MeshRenderer>();
-            changedMeshRenderers = new List<MeshRendererInstanceChanges>();
+            changedMeshRenderers = new List<MeshRendererChanges>();
             removedMeshRenderers = new List<EntityId>();
 
+#if ENABLE_TERRAIN_MODULE
             addedTerrains = new List<Terrain>();
-            changedTerrains = new List<TerrainInstanceChanges>();
+            changedTerrains = new List<TerrainChanges>();
             removedTerrains = new List<EntityId>();
+
+            addedTerrainData = new List<TerrainData>();
+            changedTerrainData = new List<TerrainDataChanges>();
+            removedTerrainData = new List<EntityId>();
+#endif
 
             addedMaterials = new List<Material>();
             removedMaterials = new List<EntityId>();
@@ -50,7 +61,10 @@ namespace UnityEngine.Rendering.LiveGI
         public bool HasChanges()
         {
             return (addedMeshRenderers.Count | removedMeshRenderers.Count | changedMeshRenderers.Count
+#if ENABLE_TERRAIN_MODULE
                 | addedTerrains.Count | changedTerrains.Count | removedTerrains.Count
+                | addedTerrainData.Count | changedTerrainData.Count | removedTerrainData.Count
+#endif
                 | addedMaterials.Count | removedMaterials.Count | changedMaterials.Count
                 | addedLights.Count | removedLights.Count | changedLights.Count) != 0;
         }
@@ -61,9 +75,15 @@ namespace UnityEngine.Rendering.LiveGI
             removedMeshRenderers.Clear();
             changedMeshRenderers.Clear();
 
+#if ENABLE_TERRAIN_MODULE
             addedTerrains.Clear();
             removedTerrains.Clear();
             changedTerrains.Clear();
+
+            addedTerrainData.Clear();
+            removedTerrainData.Clear();
+            changedTerrainData.Clear();
+#endif
 
             addedMaterials.Clear();
             removedMaterials.Clear();
@@ -76,19 +96,27 @@ namespace UnityEngine.Rendering.LiveGI
     }
 
     [System.Flags]
-    internal enum ModifiedProperties { Transform = 1, Material = 2, IsStatic = 4, ShadowCasting = 8, Layer = 16 }
+    internal enum ModifiedProperties { Transform = 1, Material = 2, IsStatic = 4, ShadowCasting = 8, Layer = 16, Heightmap = 32, TreeInstances = 64, Holes = 128 }
 
-    internal struct MeshRendererInstanceChanges
+    internal struct MeshRendererChanges
     {
-        public MeshRenderer instance;
+        public MeshRenderer meshRenderer;
         public ModifiedProperties changes;
     }
 
-    internal struct TerrainInstanceChanges
+#if ENABLE_TERRAIN_MODULE
+    internal struct TerrainChanges
     {
-        public Terrain instance;
+        public Terrain terrain;
         public ModifiedProperties changes;
     }
+
+    internal struct TerrainDataChanges
+    {
+        public TerrainData terrainData;
+        public ModifiedProperties changes;
+    }
+#endif
 
     internal class SceneUpdatesTracker : IDisposable
     {
@@ -119,7 +147,7 @@ namespace UnityEngine.Rendering.LiveGI
             public Timestamp timestamp;
         }
 
-        class MeshRendererInstanceData
+        class MeshRendererDescriptor
         {
             public Timestamp timestamp;
             public EntityId[] materialIDs;
@@ -129,7 +157,8 @@ namespace UnityEngine.Rendering.LiveGI
             public ShadowCastingMode shadowCastingMode;
         }
 
-        class TerrainInstanceData
+#if ENABLE_TERRAIN_MODULE
+        class TerrainDescriptor
         {
             public Timestamp timestamp;
             public EntityId materialID;
@@ -139,38 +168,43 @@ namespace UnityEngine.Rendering.LiveGI
             public ShadowCastingMode shadowCastingMode;
         }
 
-        class TerrainDataSnapshot
+        class TerrainDataDescriptor
         {
             public Timestamp timestamp;
-            public Texture heightmapTexture;
+            public TerrainData terrainData;
             public int treeInstanceCount;
-            public UnityEngine.Hash128 heightmapImageContentsHash;
+            public Hash128 heightmapImageContentsHash;
+            public Hash128 holesContentsHash;
         }
+#endif
 
-        class LightData
+        class LightDescriptor
         {
             public Light light;
             public Timestamp timestamp;
         }
 
         ObjectDispatcher m_ObjectDispatcher;
-        Dictionary<EntityId, MeshRendererInstanceData> m_MeshRenderers;
-        Dictionary<EntityId, TerrainInstanceData> m_Terrains;
+        Dictionary<EntityId, MeshRendererDescriptor> m_MeshRenderers;
+#if ENABLE_TERRAIN_MODULE
+        Dictionary<EntityId, TerrainDescriptor> m_Terrains;
+        Dictionary<EntityId, TerrainDataDescriptor> m_TerrainData;
+#endif
         Dictionary<EntityId, MaterialData> m_Materials;
-        Dictionary<EntityId, TerrainDataSnapshot> m_TerrainData;
-        Dictionary<EntityId, LightData> m_Lights;
+        Dictionary<EntityId, LightDescriptor> m_Lights;
         SceneChanges m_Changes;
         uint m_Timestamp;
-
 
         public SceneUpdatesTracker()
         {
             m_Changes = new SceneChanges();
-            m_MeshRenderers = new Dictionary<EntityId, MeshRendererInstanceData>();
-            m_Terrains = new Dictionary<EntityId, TerrainInstanceData>();
-            m_TerrainData = new Dictionary<EntityId, TerrainDataSnapshot>();
+            m_MeshRenderers = new Dictionary<EntityId, MeshRendererDescriptor>();
+#if ENABLE_TERRAIN_MODULE
+            m_Terrains = new Dictionary<EntityId, TerrainDescriptor>();
+            m_TerrainData = new Dictionary<EntityId, TerrainDataDescriptor>();
+#endif
             m_Materials = new Dictionary<EntityId, MaterialData>();
-            m_Lights = new Dictionary<EntityId, LightData>();
+            m_Lights = new Dictionary<EntityId, LightDescriptor>();
 
             m_ObjectDispatcher = new ObjectDispatcher();
 
@@ -179,8 +213,11 @@ namespace UnityEngine.Rendering.LiveGI
 #endif
             m_ObjectDispatcher.EnableTypeTracking<MeshRenderer>(ObjectDispatcher.TypeTrackingFlags.SceneObjects);
             m_ObjectDispatcher.EnableTransformTracking<MeshRenderer>(ObjectDispatcher.TransformTrackingType.GlobalTRS);
+#if ENABLE_TERRAIN_MODULE
             m_ObjectDispatcher.EnableTypeTracking<Terrain>(ObjectDispatcher.TypeTrackingFlags.SceneObjects);
             m_ObjectDispatcher.EnableTransformTracking<Terrain>(ObjectDispatcher.TransformTrackingType.GlobalTRS);
+            m_ObjectDispatcher.EnableTypeTracking<TerrainData>(ObjectDispatcher.TypeTrackingFlags.SceneObjects | ObjectDispatcher.TypeTrackingFlags.Assets);
+#endif
             m_ObjectDispatcher.EnableTypeTracking<Material>(ObjectDispatcher.TypeTrackingFlags.SceneObjects | ObjectDispatcher.TypeTrackingFlags.Assets);
             m_ObjectDispatcher.EnableTypeTracking<Light>(ObjectDispatcher.TypeTrackingFlags.SceneObjects);
             m_ObjectDispatcher.EnableTransformTracking<Light>(ObjectDispatcher.TransformTrackingType.GlobalTRS);
@@ -198,7 +235,10 @@ namespace UnityEngine.Rendering.LiveGI
             m_Changes.Clear();
 
             FindMeshRendererChanges();
+#if ENABLE_TERRAIN_MODULE
             FindTerrainChanges();
+            FindTerrainDataChanges();
+#endif
             FindMaterialsChanges();
             FindLightChanges(filterBakedLights);
 
@@ -210,9 +250,9 @@ namespace UnityEngine.Rendering.LiveGI
             using var materialChanges = m_ObjectDispatcher.GetTypeChangesAndClear<Material>(Unity.Collections.Allocator.Temp);
 
             // Handle added materials in mesh renderers
-            foreach (var meshRendererInstance in m_MeshRenderers.Values)
+            foreach (var meshRenderer in m_MeshRenderers.Values)
             {
-                foreach (var material in meshRendererInstance.materials)
+                foreach (var material in meshRenderer.materials)
                 {
                     MaterialData data = null;
                     if (material == null)
@@ -229,10 +269,11 @@ namespace UnityEngine.Rendering.LiveGI
                 }
             }
 
+#if ENABLE_TERRAIN_MODULE
             // Handle added materials in terrains
-            foreach (var terrainInstance in m_Terrains.Values)
+            foreach (var terrain in m_Terrains.Values)
             {
-                var material = terrainInstance.material;
+                var material = terrain.material;
                 MaterialData data = null;
                 if (material == null)
                     continue;
@@ -246,6 +287,7 @@ namespace UnityEngine.Rendering.LiveGI
                     m_Materials.Add(material.GetEntityId(), new MaterialData(material, m_Timestamp));
                 }
             }
+#endif
 
             var justCompiledMaterials = new HashSet<Material>();
 
@@ -275,8 +317,7 @@ namespace UnityEngine.Rendering.LiveGI
             // Handle changed materials
             foreach (Material changedMaterial in materialChanges.changed)
             {
-                MaterialData data;
-                if (!m_Materials.TryGetValue(changedMaterial.GetEntityId(), out data))
+                if (!m_Materials.TryGetValue(changedMaterial.GetEntityId(), out var data))
                     continue;
 
                 if (data.timestamp.creation == m_Timestamp) // if this is an instance that has just been added
@@ -335,7 +376,7 @@ namespace UnityEngine.Rendering.LiveGI
             foreach (var item in changedRenderers)
             {
                 var meshRenderer = item.Value.objectReference;
-                bool tranformChanged = item.Value.transformChanged;
+                bool transformChanged = item.Value.transformChanged;
 
                 if (!meshRenderer.enabled || !meshRenderer.gameObject.activeInHierarchy)
                 {
@@ -345,17 +386,17 @@ namespace UnityEngine.Rendering.LiveGI
                 if (!m_MeshRenderers.TryGetValue(meshRenderer.GetEntityId(), out var oldData))
                 {
                     // This renderer was just added
-                    var newData = CreateInstanceData(m_Timestamp, meshRenderer);
+                    var newData = CreateMeshRendererDescriptor(m_Timestamp, meshRenderer);
                     m_MeshRenderers.Add(meshRenderer.GetEntityId(), newData);
                     m_Changes.addedMeshRenderers.Add(meshRenderer);
                     continue;
                 }
 
-                var data = CreateInstanceData(m_Timestamp, meshRenderer);
+                var data = CreateMeshRendererDescriptor(m_Timestamp, meshRenderer);
 
                 ModifiedProperties changes = 0;
 
-                if (tranformChanged)
+                if (transformChanged)
                     changes |= ModifiedProperties.Transform;
 
                 if (!IntArraySequenceEqual(oldData.materialIDs, data.materialIDs))
@@ -369,10 +410,10 @@ namespace UnityEngine.Rendering.LiveGI
 
                 if (changes != 0)
                 {
-                    m_Changes.changedMeshRenderers.Add(new MeshRendererInstanceChanges()
+                    m_Changes.changedMeshRenderers.Add(new MeshRendererChanges()
                     {
                         changes = changes,
-                        instance = meshRenderer
+                        meshRenderer = meshRenderer
                     });
 
                     m_MeshRenderers[meshRenderer.GetEntityId()] = data;
@@ -380,6 +421,20 @@ namespace UnityEngine.Rendering.LiveGI
             }
         }
 
+        static MeshRendererDescriptor CreateMeshRendererDescriptor(uint timestamp, MeshRenderer meshRenderer)
+        {
+            return new MeshRendererDescriptor()
+            {
+                timestamp = new Timestamp { lastVisit = timestamp, creation = timestamp },
+                isStatic = meshRenderer.gameObject.isStatic,
+                materials = meshRenderer.sharedMaterials,
+                materialIDs = Array.ConvertAll(meshRenderer.sharedMaterials, mat => mat != null ? mat.GetEntityId() : EntityId.None),
+                shadowCastingMode = meshRenderer.shadowCastingMode,
+                renderer = meshRenderer,
+            };
+        }
+
+#if ENABLE_TERRAIN_MODULE
         private void FindTerrainChanges()
         {
             // Handle changed terrains
@@ -416,7 +471,7 @@ namespace UnityEngine.Rendering.LiveGI
             foreach (var item in changedTerrains)
             {
                 var terrain = item.Value.objectReference;
-                bool tranformChanged = item.Value.transformChanged;
+                bool transformChanged = item.Value.transformChanged;
 
                 if (!terrain.enabled || !terrain.gameObject.activeInHierarchy)
                 {
@@ -426,17 +481,17 @@ namespace UnityEngine.Rendering.LiveGI
                 if (!m_Terrains.TryGetValue(terrain.GetEntityId(), out var oldData))
                 {
                     // This terrain was just added
-                    var newData = CreateInstanceData(m_Timestamp, terrain);
+                    var newData = CreateTerrainDescriptor(m_Timestamp, terrain);
                     m_Terrains.Add(terrain.GetEntityId(), newData);
                     m_Changes.addedTerrains.Add(terrain);
                     continue;
                 }
 
-                var data = CreateInstanceData(m_Timestamp, terrain);
+                var data = CreateTerrainDescriptor(m_Timestamp, terrain);
 
                 ModifiedProperties changes = 0;
 
-                if (tranformChanged)
+                if (transformChanged)
                     changes |= ModifiedProperties.Transform;
 
                 if (oldData.materialID != data.materialID)
@@ -450,33 +505,19 @@ namespace UnityEngine.Rendering.LiveGI
 
                 if (changes != 0)
                 {
-                    m_Changes.changedTerrains.Add(new TerrainInstanceChanges()
+                    m_Changes.changedTerrains.Add(new TerrainChanges()
                     {
                         changes = changes,
-                        instance = terrain
+                        terrain = terrain
                     });
 
                     m_Terrains[terrain.GetEntityId()] = data;
                 }
             }
         }
-
-        static MeshRendererInstanceData CreateInstanceData(uint timestamp, MeshRenderer meshRenderer)
+        static TerrainDescriptor CreateTerrainDescriptor(uint timestamp, Terrain terrain)
         {
-            return new MeshRendererInstanceData()
-            {
-                timestamp = new Timestamp { lastVisit = timestamp, creation = timestamp },
-                isStatic = meshRenderer.gameObject.isStatic,
-                materials = meshRenderer.sharedMaterials,
-                materialIDs = Array.ConvertAll(meshRenderer.sharedMaterials, mat => mat != null ? mat.GetEntityId() : EntityId.None),
-                shadowCastingMode = meshRenderer.shadowCastingMode,
-                renderer = meshRenderer,
-            };
-        }
-
-        static TerrainInstanceData CreateInstanceData(uint timestamp, Terrain terrain)
-        {
-            return new TerrainInstanceData()
+            return new TerrainDescriptor()
             {
                 timestamp = new Timestamp { lastVisit = timestamp, creation = timestamp },
                 isStatic = terrain.gameObject.isStatic,
@@ -486,6 +527,125 @@ namespace UnityEngine.Rendering.LiveGI
                 terrain = terrain,
             };
         }
+
+        private void FindTerrainDataChanges()
+        {
+            var terrainDataChanges = m_ObjectDispatcher.GetTypeChangesAndClear<TerrainData>(Unity.Collections.Allocator.Temp);
+
+            // Handle removed terrain data
+            foreach (var key in terrainDataChanges.destroyedID)
+            {
+                m_TerrainData.Remove(key);
+                m_Changes.removedTerrainData.Add(key);
+            }
+
+            // Update the remaining timestamps of the active terrain data
+            List<EntityId> keys = new List<EntityId>(m_TerrainData.Keys);
+            foreach (var key in keys)
+            {
+                if (!m_TerrainData[key].terrainData)
+                    continue;
+
+                m_TerrainData[key].timestamp.lastVisit = m_Timestamp;
+            }
+
+            foreach (var obj in terrainDataChanges.changed)
+            {
+                var terrainData = obj as TerrainData;
+                if (terrainData == null)
+                    continue;
+
+                if (!m_TerrainData.TryGetValue(terrainData.GetEntityId(), out var oldData))
+                {
+                    // This terrain data was just added
+                    var newData = CreateTerrainDataDescriptor(m_Timestamp, terrainData);
+                    m_TerrainData.Add(terrainData.GetEntityId(), newData);
+                    m_Changes.addedTerrainData.Add(terrainData);
+                    continue;
+                }
+
+                var data = CreateTerrainDataDescriptor(m_Timestamp, terrainData);
+
+                ModifiedProperties changes = 0;
+
+                if (oldData.treeInstanceCount != data.treeInstanceCount)
+                    changes |= ModifiedProperties.TreeInstances;
+
+                if (oldData.heightmapImageContentsHash != data.heightmapImageContentsHash)
+                    changes |= ModifiedProperties.Heightmap;
+
+                if (oldData.holesContentsHash != data.holesContentsHash)
+                    changes |= ModifiedProperties.Holes;
+
+                if (changes != 0)
+                {
+                    m_Changes.changedTerrainData.Add(new TerrainDataChanges()
+                    {
+                        terrainData = terrainData,
+                        changes = changes
+                    });
+
+                    m_TerrainData[terrainData.GetEntityId()] = data;
+                }
+
+                // When holes change, the terrain material may have changed, so we need to refresh the terrain descriptors
+                if ((changes & ModifiedProperties.Holes) != 0)
+                    RefreshTerrainDescriptorsForTerrainData(terrainData);
+            }
+        }
+
+        static TerrainDataDescriptor CreateTerrainDataDescriptor(uint timestamp, TerrainData terrainData)
+        {
+            return new TerrainDataDescriptor()
+            {
+                timestamp = new Timestamp { lastVisit = timestamp, creation = timestamp },
+                terrainData = terrainData,
+                treeInstanceCount = terrainData.treeInstanceCount,
+                heightmapImageContentsHash = terrainData.heightmapTexture != null ? GetTerrainDataHeightmapHash(terrainData) : new Hash128(),
+                holesContentsHash = terrainData.holesTexture != null ?  GetTerrainDataHolesHash(terrainData) : new Hash128()
+            };
+        }
+
+        static void RefreshTerrainDescriptorAndEmitChanges(
+            Terrain terrain,
+            Dictionary<EntityId, TerrainDescriptor> terrains,
+            List<TerrainChanges> changedTerrains,
+            Dictionary<EntityId, TerrainDataDescriptor> terrainData,
+            uint timestamp)
+        {
+            var entityId = terrain.GetEntityId();
+            Debug.Assert(terrains.ContainsKey(entityId));
+            var oldDescriptor = terrains[entityId];
+
+            var newDescriptor = CreateTerrainDescriptor(timestamp, terrain);
+            newDescriptor.timestamp = oldDescriptor.timestamp;
+
+            if (oldDescriptor.materialID != newDescriptor.materialID)
+            {
+                changedTerrains.Add(new TerrainChanges()
+                {
+                    changes = ModifiedProperties.Material,
+                    terrain = terrain
+                });
+            }
+
+            terrains[entityId] = newDescriptor;
+        }
+
+        void RefreshTerrainDescriptorsForTerrainData(TerrainData terrainData)
+        {
+            var terrainsToRefresh = new List<Terrain>();
+            foreach (var kvp in m_Terrains)
+            {
+                var descriptor = kvp.Value;
+                if (descriptor.terrain != null && descriptor.terrain.terrainData == terrainData)
+                    terrainsToRefresh.Add(descriptor.terrain);
+            }
+
+            foreach (var terrain in terrainsToRefresh)
+                RefreshTerrainDescriptorAndEmitChanges(terrain, m_Terrains, m_Changes.changedTerrains, m_TerrainData, m_Timestamp);
+        }
+#endif
 
         static private bool ShouldIncludeLight(Light light, bool filterBakedLights)
         {
@@ -530,7 +690,7 @@ namespace UnityEngine.Rendering.LiveGI
                 if (!ShouldIncludeLight(light, filterBakedLights))
                     continue;
 
-                var newData = CreateLightData(m_Timestamp, light);
+                var newData = CreateLightDescriptor(m_Timestamp, light);
 
                 // Newly added lights
                 if (!m_Lights.ContainsKey(light.GetEntityId()))
@@ -546,14 +706,64 @@ namespace UnityEngine.Rendering.LiveGI
             }
         }
 
-        LightData CreateLightData(uint timestamp, Light light)
+        static LightDescriptor CreateLightDescriptor(uint timestamp, Light light)
         {
-            return new LightData()
+            return new LightDescriptor()
             {
                 timestamp = new Timestamp { lastVisit = timestamp, creation = timestamp },
                 light = light,
             };
         }
+
+#if ENABLE_TERRAIN_MODULE
+        static Hash128 GetTerrainDataHeightmapHash(TerrainData terrainData)
+        {
+            Hash128 hash = new Hash128();
+
+            var resolution = terrainData.heightmapResolution;
+            if (resolution == 0)
+                return hash;
+
+            var heights = terrainData.GetHeights(0, 0, resolution, resolution);
+            for (var y = 0; y < resolution; y++)
+            {
+                var row = new float[resolution];
+                for (var x = 0; x < resolution; x++)
+                {
+                    row[x] = heights[y, x];
+                }
+                hash.Append(row);
+            }
+
+            var scale = terrainData.heightmapScale;
+            hash.Append(scale.x);
+            hash.Append(scale.y);
+            hash.Append(scale.z);
+
+            return hash;
+        }
+
+        static Hash128 GetTerrainDataHolesHash(TerrainData terrainData)
+        {
+            Hash128 hash = new Hash128();
+
+            var holesResolution = terrainData.holesResolution;
+            if (holesResolution == 0)
+                return hash;
+
+            var holes = terrainData.GetHoles(0, 0, holesResolution, holesResolution);
+            for (var y = 0; y < holesResolution; y++)
+            {
+                var row = new byte[holesResolution];
+                for (var x = 0; x < holesResolution; x++)
+                {
+                    row[x] = holes[y, x] ? (byte)1 : (byte)0;
+                }
+                hash.Append(row);
+            }
+            return hash;
+        }
+#endif
 
         struct ChangedObject<T>
             where T : Component
@@ -562,7 +772,7 @@ namespace UnityEngine.Rendering.LiveGI
             public bool transformChanged;
         }
 
-        Dictionary<EntityId, ChangedObject<T>> MergeChanges<T>(Object[] changedRenderers, Component[] changedTransforms)
+        static Dictionary<EntityId, ChangedObject<T>> MergeChanges<T>(Object[] changedRenderers, Component[] changedTransforms)
             where T : Component
         {
             var map = new Dictionary<EntityId, ChangedObject<T>>();

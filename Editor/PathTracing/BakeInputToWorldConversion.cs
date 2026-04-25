@@ -2,13 +2,17 @@ using System;
 using System.Collections.Generic;
 using UnityEngine.PathTracing.Core;
 using UnityEngine.Rendering;
-using UnityEngine.LightTransport;
 using Unity.Mathematics;
+using UnityEditor.LightBaking;
 using UnityEngine;
 using UnityEngine.PathTracing.Lightmapping;
 using UnityEngine.PathTracing.Integration;
 using UnityEngine.Rendering.Sampling;
 using UnityEngine.Rendering.UnifiedRayTracing;
+using InputExtraction = UnityEngine.LightTransport.InputExtraction;
+using Material = UnityEngine.Material;
+using Unity.Collections;
+using Unity.Collections.LowLevel.Unsafe;
 
 namespace UnityEditor.PathTracing.LightBakerBridge
 {
@@ -17,7 +21,63 @@ namespace UnityEditor.PathTracing.LightBakerBridge
 
     internal static class BakeInputToWorldConversion
     {
-        private static Mesh MeshDataToMesh(in MeshData meshData)
+        private static bool CanBulkCopy(VertexData vertexData, (VertexAttribute attr, int attributeIndex)[] attributeMapping, NativeArray<byte> destination)
+        {
+            bool canBulkCopy = vertexData.data.Length == destination.Length;
+            if (canBulkCopy)
+            {
+                // Calculate destination stride (size of one vertex with all attributes)
+                int destStride = destination.Length / (int)vertexData.vertexCount;
+
+                // Verify that all attributes use the same stride (interleaved) and offsets match Unity's layout
+                int expectedOffset = 0;
+                for (int a = 0; a < attributeMapping.Length; a++)
+                {
+                    int attributeIndex = attributeMapping[a].attributeIndex;
+                    int srcStride = (int)vertexData.stride[attributeIndex];
+                    int srcOffset = (int)vertexData.offsets[attributeIndex];
+                    int dimension = (int)vertexData.dimensions[attributeIndex];
+                    int attributeSize = dimension * sizeof(float);
+
+                    if (srcStride != destStride || srcOffset != expectedOffset)
+                    {
+                        canBulkCopy = false;
+                        break;
+                    }
+                    expectedOffset += attributeSize;
+                }
+            }
+            return canBulkCopy;
+        }
+
+        private static void CopyVertexData(VertexData vertexData, (VertexAttribute attr, int attributeIndex)[] attributeMapping, NativeArray<byte> destination)
+        {
+            int destStride = destination.Length / (int)vertexData.vertexCount;
+            // Copy each vertex's attributes using stride/offset information
+            for (int v = 0; v < vertexData.vertexCount; v++)
+            {
+                int destAttributeOffset = 0;
+                // Copy all attributes for the vertex - use attributeMapping to find the right source attribute and where it should go in the destination vertex layout
+                for (int a = 0; a < attributeMapping.Length; a++)
+                {
+                    int attributeIndex = attributeMapping[a].attributeIndex;
+                    int srcStride = (int)vertexData.stride[attributeIndex];
+                    int srcBaseOffset = (int)vertexData.offsets[attributeIndex];
+                    int dimension = (int)vertexData.dimensions[attributeIndex];
+                    int attributeSize = dimension * sizeof(float);
+                    int srcIndex = srcBaseOffset + v * srcStride;
+                    int destIndex = v * destStride + destAttributeOffset;
+
+                    // Copy attribute data
+                    for (int b = 0; b < attributeSize; b++)
+                        destination[destIndex + b] = vertexData.data[srcIndex + b];
+
+                    destAttributeOffset += attributeSize;
+                }
+            }
+        }
+
+        internal static Mesh MeshDataToMesh(in MeshData meshData)
         {
             ref readonly VertexData vertexData = ref meshData.vertexData;
 
@@ -26,17 +86,51 @@ namespace UnityEditor.PathTracing.LightBakerBridge
             var outRawMesh = outRawMeshArray[0];
 
             int vertexCount = (int)vertexData.vertexCount;
+
+            // Build attribute list with correct dimensions from vertexData
             List<VertexAttributeDescriptor> vertexLayout = new();
+            List<(VertexAttribute attr, int attributeIndex)> attributeMapping = new();
+            int attributeIndex = 0;
+
             if (vertexData.meshShaderChannelMask.HasFlag(MeshShaderChannelMask.Vertex))
-                vertexLayout.Add(new VertexAttributeDescriptor(VertexAttribute.Position, VertexAttributeFormat.Float32, 3));
+            {
+                int dimension = (int)vertexData.dimensions[attributeIndex];
+                vertexLayout.Add(new VertexAttributeDescriptor(VertexAttribute.Position, VertexAttributeFormat.Float32, dimension));
+                attributeMapping.Add((VertexAttribute.Position, attributeIndex));
+                attributeIndex++;
+            }
             if (vertexData.meshShaderChannelMask.HasFlag(MeshShaderChannelMask.Normal))
-                vertexLayout.Add(new VertexAttributeDescriptor(VertexAttribute.Normal, VertexAttributeFormat.Float32, 3));
+            {
+                int dimension = (int)vertexData.dimensions[attributeIndex];
+                vertexLayout.Add(new VertexAttributeDescriptor(VertexAttribute.Normal, VertexAttributeFormat.Float32, dimension));
+                attributeMapping.Add((VertexAttribute.Normal, attributeIndex));
+                attributeIndex++;
+            }
             if (vertexData.meshShaderChannelMask.HasFlag(MeshShaderChannelMask.TexCoord0))
-                vertexLayout.Add(new VertexAttributeDescriptor(VertexAttribute.TexCoord0, VertexAttributeFormat.Float32, 2));
+            {
+                int dimension = (int)vertexData.dimensions[attributeIndex];
+                vertexLayout.Add(new VertexAttributeDescriptor(VertexAttribute.TexCoord0, VertexAttributeFormat.Float32, dimension));
+                attributeMapping.Add((VertexAttribute.TexCoord0, attributeIndex));
+                attributeIndex++;
+            }
             if (vertexData.meshShaderChannelMask.HasFlag(MeshShaderChannelMask.TexCoord1))
-                vertexLayout.Add(new VertexAttributeDescriptor(VertexAttribute.TexCoord1, VertexAttributeFormat.Float32, 2));
+            {
+                int dimension = (int)vertexData.dimensions[attributeIndex];
+                vertexLayout.Add(new VertexAttributeDescriptor(VertexAttribute.TexCoord1, VertexAttributeFormat.Float32, dimension));
+                attributeMapping.Add((VertexAttribute.TexCoord1, attributeIndex));
+                attributeIndex++;
+            }
             outRawMesh.SetVertexBufferParams(vertexCount, vertexLayout.ToArray());
-            outRawMesh.GetVertexData<byte>().CopyFrom(vertexData.data);
+
+            // Copy vertex data respecting source stride and offset
+            var destVertexData = outRawMesh.GetVertexData<byte>();
+
+            // Check if source data layout matches Unity's expected layout for a fast bulk copy
+            bool canBulkCopy = CanBulkCopy(vertexData, attributeMapping.ToArray(), destVertexData);
+            if (canBulkCopy)
+                destVertexData.CopyFrom(vertexData.data); // Fast path: source layout matches destination, do bulk copy
+            else
+                CopyVertexData(vertexData, attributeMapping.ToArray(), destVertexData);
 
             outRawMesh.SetIndexBufferParams(meshData.indexBuffer.Length, IndexFormat.UInt32);
             outRawMesh.GetIndexData<uint>().CopyFrom(meshData.indexBuffer);
@@ -110,6 +204,7 @@ namespace UnityEditor.PathTracing.LightBakerBridge
                 case LightBakerBridge.LightType.Rectangle: return UnityEngine.LightType.Rectangle;
                 case LightBakerBridge.LightType.Disc: return UnityEngine.LightType.Disc;
                 case LightBakerBridge.LightType.SpotBoxShape: return UnityEngine.LightType.Box;
+                case LightBakerBridge.LightType.SpotPyramidShape: return UnityEngine.LightType.Pyramid;
                 default: throw new ArgumentException("Unknown light type");
             }
         }
@@ -172,7 +267,7 @@ namespace UnityEditor.PathTracing.LightBakerBridge
                 lightDescriptor.ShadowMaskChannel = (lightData.shadowMaskChannel < 4) ? (int)lightData.shadowMaskChannel : -1;
                 lightDescriptor.UseColorTemperature = false;
                 lightDescriptor.FalloffType = LightBakerFalloffTypeToUnityFalloffType(lightData.falloff);
-                lightDescriptor.ShadowRadius = Util.IsPunctualLightType(lightDescriptor.Type) ? lightData.shape0 : 0.0f;
+                lightDescriptor.ShadowRadius = GetLightShadowRadius(lightDescriptor.Type, lightData);
                 lightDescriptor.CookieSize = lightData.cookieScale;
                 lightDescriptor.CookieTexture = Util.IsCookieValid(lightData.cookieTextureIndex) ? CreateTextureFromCookieData(in bakeInput.cookieData[lightData.cookieTextureIndex]) : null;
                 if (lightDescriptor.CookieTexture != null)
@@ -183,6 +278,10 @@ namespace UnityEditor.PathTracing.LightBakerBridge
                     case UnityEngine.LightType.Box:
                     case UnityEngine.LightType.Rectangle:
                         lightDescriptor.AreaSize = new Vector2(lightData.shape0, lightData.shape1);
+                        break;
+
+                    case UnityEngine.LightType.Pyramid:
+                        lightDescriptor.AreaSize = GetPyramidLightRect(lightData.coneAngle, lightData.shape0);
                         break;
 
                     case UnityEngine.LightType.Disc:
@@ -203,8 +302,26 @@ namespace UnityEditor.PathTracing.LightBakerBridge
                 lights[i] = lightDescriptor;
             }
 
-            world.lightPickingMethod = LightPickingMethod.LightGrid;
+            world.lightPickingMethod = bakeInput.lightingSettings.lightAccelerationStructure == LightAccelerationStructure.LightGrid ? LightPickingMethod.LightGrid : LightPickingMethod.Uniform;
             lightHandles = world.AddLights(lights, false, autoEstimateLUTRange, bakeInput.lightingSettings.mixedLightingMode);
+        }
+
+        static Vector2 GetPyramidLightRect(float coneAngleInRads, float pyramidAspectRadio)
+        {
+            float ar = pyramidAspectRadio;
+            float h = 2.0f * Mathf.Tan(coneAngleInRads * 0.5f);
+
+            float width = ar >= 1.0f ? (h * ar) : h;
+            float height = ar >= 1.0f ? h : (h / ar);
+
+            return new Vector2(width, height);
+        }
+
+        static float GetLightShadowRadius(UnityEngine.LightType lightType, in LightData lightData)
+        {
+            if (lightType == UnityEngine.LightType.Pyramid)
+                return lightData.shape1;  // For pyramid lights, shadow radius is in shape1 (shape0 is aspect ratio)
+            return (Util.IsPunctualLightType(lightType) && lightType != UnityEngine.LightType.Box) ? lightData.shape0 : 0.0f;
         }
 
         internal static void InjectEnvironmentLight(
@@ -246,15 +363,27 @@ namespace UnityEditor.PathTracing.LightBakerBridge
             // Create albedo and emission textures from materials
             var perTexturePairMaterials = new MaterialPool.MaterialDescriptor[bakeInput.albedoData.Length];
             Debug.Assert(bakeInput.albedoData.Length == bakeInput.emissiveData.Length);
+            Debug.Assert(bakeInput.albedoData.Length == bakeInput.albedoDataProperties.Length);
+            Debug.Assert(bakeInput.emissiveData.Length == bakeInput.emissiveDataProperties.Length);
             for (int i = 0; i < bakeInput.albedoData.Length; i++)
             {
                 ref var material = ref perTexturePairMaterials[i];
                 var baseTexture = CreateTexture2DFromTextureData(in bakeInput.albedoData[i], $"World (albedo) {i}");
+                ref readonly TextureProperties albedoProperties = ref bakeInput.albedoDataProperties[i];
+                baseTexture.wrapModeU = albedoProperties.wrapModeU;
+                baseTexture.wrapModeV = albedoProperties.wrapModeV;
+                baseTexture.filterMode = albedoProperties.filterMode;
                 allocatedObjects.Add(baseTexture);
                 var emissiveTexture = CreateTexture2DFromTextureData(in bakeInput.emissiveData[i], $"World (emissive) {i}");
+                ref readonly TextureProperties emissiveProperties = ref bakeInput.emissiveDataProperties[i];
+                emissiveTexture.wrapModeU = emissiveProperties.wrapModeU;
+                emissiveTexture.wrapModeV = emissiveProperties.wrapModeV;
+                emissiveTexture.filterMode = emissiveProperties.filterMode;
                 allocatedObjects.Add(emissiveTexture);
                 material.Albedo = baseTexture;
                 material.Emission = emissiveTexture;
+                material.PointSampleAlbedo = albedoProperties.filterMode == FilterMode.Point;
+                material.PointSampleEmission = emissiveProperties.filterMode == FilterMode.Point;
 
                 // Only mark emissive if it isn't the default black texture
                 bool isEmissiveSinglePixel = bakeInput.emissiveData[i].data.Length == 1;
@@ -375,6 +504,22 @@ namespace UnityEditor.PathTracing.LightBakerBridge
             return outMesh;
         }
 
+        private static Bounds CalculateMeshBounds(Vector3[] vertices, Matrix4x4 localToWorldMatrix4x4, out Vector3 meshMinVertex, out Vector3 meshMaxVertex)
+        {
+            meshMinVertex = new Vector3(float.MaxValue, float.MaxValue, float.MaxValue);
+            meshMaxVertex = new Vector3(float.MinValue, float.MinValue, float.MinValue);
+            foreach (Vector3 vert in vertices)
+            {
+                // TODO: transform the bounding box instead of looping verts (https://jira.unity3d.com/browse/GFXFEAT-667)
+                Vector3 v = localToWorldMatrix4x4.MultiplyPoint(vert);
+                meshMinVertex = Vector3.Min(v, meshMinVertex);
+                meshMaxVertex = Vector3.Max(v, meshMaxVertex);
+            }
+            Bounds meshBounds = new Bounds();
+            meshBounds.SetMinMax(meshMinVertex, meshMaxVertex);
+            return meshBounds;
+        }
+
         internal static void ConvertInstancesAndMeshes(
             World world,
             in BakeInput bakeInput,
@@ -386,8 +531,6 @@ namespace UnityEditor.PathTracing.LightBakerBridge
             List<UnityEngine.Object> allocatedObjects,
             uint renderingObjectLayer)
         {
-            sceneBounds = new Bounds();
-
             // Extract meshes
             meshes = new Mesh[bakeInput.meshData.Length + bakeInput.terrainData.Length];
             int meshIndex = 0;
@@ -423,6 +566,9 @@ namespace UnityEditor.PathTracing.LightBakerBridge
             RenderedGameObjectsFilter filter = RenderedGameObjectsFilter.OnlyStatic;
             const bool isStatic = true;
 
+            Vector3 sceneMinVertex = new Vector3(float.MaxValue, float.MaxValue, float.MaxValue);
+            Vector3 sceneMaxVertex = new Vector3(float.MinValue, float.MinValue, float.MinValue);
+
             // Extract instances
             List<FatInstance> fatInstanceList = new();
             for (int i = 0; i < bakeInput.instanceData.Length; i++)
@@ -444,17 +590,11 @@ namespace UnityEditor.PathTracing.LightBakerBridge
                 Vector2 uvBoundsOffset = uvBoundsOffsets[globalMeshIndex];
 
                 // Calculate bounds
-                var bounds = new Bounds();
-                foreach (Vector3 vert in mesh.vertices)
-                {
-                    bounds.Encapsulate(localToWorldMatrix4x4.MultiplyPoint(vert)); // TODO: transform the bounding box instead of looping verts (https://jira.unity3d.com/browse/GFXFEAT-667)
-                }
+                Bounds meshBounds = CalculateMeshBounds(mesh.vertices, localToWorldMatrix4x4, out Vector3 meshMinVertex, out Vector3 meshMaxVertex);
 
                 // Keep track of scene bounds as we go
-                if (i == 0)
-                    sceneBounds = bounds;
-                else
-                    sceneBounds.Encapsulate(bounds);
+                sceneMinVertex = Vector3.Min(sceneMinVertex, meshMinVertex);
+                sceneMaxVertex = Vector3.Max(sceneMaxVertex, meshMaxVertex);
 
                 // Get masks
                 uint[] subMeshMasks = new uint[mesh.subMeshCount];
@@ -477,7 +617,7 @@ namespace UnityEditor.PathTracing.LightBakerBridge
                     Materials = materials,
                     SubMeshMasks = subMeshMasks,
                     LocalToWorldMatrix = localToWorldMatrix4x4,
-                    Bounds = bounds,
+                    Bounds = meshBounds,
                     IsStatic = isStatic,
                     LodIdentifier = lodIdentifier,
                     ReceiveShadows = instanceData.receiveShadows,
@@ -489,6 +629,9 @@ namespace UnityEditor.PathTracing.LightBakerBridge
             }
             fatInstances = fatInstanceList.ToArray();
             Debug.Assert(fatInstances.Length == bakeInput.instanceData.Length);
+
+            sceneBounds = new Bounds();
+            sceneBounds.SetMinMax(sceneMinVertex, sceneMaxVertex);
         }
 
         internal static void PopulateWorld(InputExtraction.BakeInput input, UnityComputeWorld world, SamplingResources samplingResources, CommandBuffer cmd, bool autoEstimateLUTRange)
@@ -502,7 +645,7 @@ namespace UnityEditor.PathTracing.LightBakerBridge
             Dictionary<int, List<LodInstanceBuildData>> lodInstances;
             Dictionary<Int32, List<ContributorLodInfo>> lodgroupToContributorInstances;
             WorldHelpers.AddContributingInstancesToWorld(world.PathTracingWorld, in fatInstances, out lodInstances, out lodgroupToContributorInstances);
-            world.PathTracingWorld.Build(sceneBounds, cmd, ref world.ScratchBuffer, samplingResources, true, 1024);
+            world.PathTracingWorld.Build(sceneBounds, cmd, ref world.ScratchBuffer, samplingResources, true, 1024, (int)input.bakeInput.GetLightingSettings().lightGridMaxCells);
         }
 
         internal static void DeserializeAndInjectBakeInputData(

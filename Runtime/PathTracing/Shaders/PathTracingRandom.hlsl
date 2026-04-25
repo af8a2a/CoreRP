@@ -7,7 +7,7 @@
 #define RAND_DIM_JITTERED_SHADOW    4    // Used for jittered shadows, ideally should be removed and the jitter handled in the SampleLightShape code instead but that's a refactor for another day
 #define RAND_DIM_LIGHT_SELECTION    5    // used for light selection (arbitrarily many dimensions after this point)
 
-#define RUSSIAN_ROULETTE_MIN_BOUNCES 2 // Min bounces for russian roulette. Matches PLM_DEFAULT_MIN_BOUNCES
+#define RUSSIAN_ROULETTE_MIN_BOUNCES 1 // Min bounces for russian roulette. Matches PLM_DEFAULT_MIN_BOUNCES - 1
 
 // Currently we use maximum 5 random numbers per light:
 // 1 number to select a (mesh) light,
@@ -22,6 +22,24 @@
 
 // The number of dimensions used per bounce (depends on the number of light evaluations)
 #define QRNG_SAMPLES_PER_BOUNCE (RAND_DIM_LIGHT_SELECTION + RAND_SAMPLES_PER_LIGHT * MAX_LIGHT_EVALUATIONS)
+
+// Which RNG to use for most of our path tracing code.
 #define QRNG_METHOD_SOBOL
 #define QRNG_SOBOL_02
+
+// Define an alias for the RNG type we have chosen.
+#if defined(QRNG_METHOD_SOBOL)
+    #define QRNG_TYPE QrngSobol2D
+#elif defined(QRNG_METHOD_SOBOL_BLUE_NOISE)
+    #define QRNG_TYPE QrngSobolBlueNoise2D
+#elif defined(QRNG_METHOD_GLOBAL_SOBOL_BLUE_NOISE)
+    #define QRNG_TYPE QrngGlobalSobolBlueNoise2D
+#elif defined(QRNG_METHOD_KRONECKER)
+    #define QRNG_TYPE QrngKronecker2D
+#elif defined(QRNG_METHOD_RANDOM_XOR_SHIFT)
+    #define QRNG_TYPE QrngXorShift
+#elif defined(QRNG_METHOD_RANDOM_PCG_4D)
+    #define QRNG_TYPE QrngPcg4D
+#endif
+
 #include "PathTracingSampler.hlsl"

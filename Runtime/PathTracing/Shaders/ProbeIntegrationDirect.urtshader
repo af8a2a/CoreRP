@@ -1,4 +1,7 @@
 #pragma only_renderers d3d11 vulkan metal glcore
+
+#pragma multi_compile _ LIGHT_SAMPLING_UNIFORM LIGHT_SAMPLING_RIS LIGHT_SAMPLING_ROUND_ROBIN
+
 #define UNIFIED_RT_GROUP_SIZE_X 128
 #define UNIFIED_RT_GROUP_SIZE_Y 1
 #define UNIFIED_RT_RAYGEN_FUNC IntegrateDirectRadiance
@@ -8,6 +11,7 @@
 #include "PathTracing.hlsl"
 #include "SphericalHarmonicsUtils.hlsl"
 
+uint g_LightIndexInCell;
 RWStructuredBuffer<float3> g_Positions;
 RWStructuredBuffer<float> g_RadianceShl2;
 uint g_PositionsOffset;
@@ -42,8 +46,21 @@ void IntegrateDirectRadiance(UnifiedRT::DispatchInfo dispatchInfo)
     options.lightsRenderingLayerMask = 0xFFFFFFFF;
     options.numLightCandidates = min(g_LightEvaluations, MAX_LIGHT_EVALUATIONS);
 
+    uint numLightsInCell = GetNumLights(worldPosition);
+	// If there are no lights to sample, continuing is a waste of time.
+	[branch] if (numLightsInCell == 0)
+	    return;
+
     LightSample lightSample = (LightSample)0;
+    #ifdef LIGHT_SAMPLING_ROUND_ROBIN
+    [branch] if (g_LightIndexInCell >= numLightsInCell)
+        return;
+
+    PTLight light = GetLightInCell(worldPosition, g_LightIndexInCell);
+    if (SampleLightRadiance(dispatchInfo, accelStruct, g_AccelStructInstanceList, worldPosition, 0.0f, options, light, rngState, lightSample))
+    #else
     if (SampleLightsRadiance(dispatchInfo, accelStruct, g_AccelStructInstanceList, worldPosition, 0.0f, options, rngState, lightSample))
+    #endif
     {
         // Project into SH.
         accumulatedRadianceSH[0] += lightSample.radiance * SHL0();
@@ -58,12 +75,25 @@ void IntegrateDirectRadiance(UnifiedRT::DispatchInfo dispatchInfo)
         accumulatedRadianceSH[8] += lightSample.radiance * SHL22(lightSample.direction);
     }
 
+    #ifdef LIGHT_SAMPLING_ROUND_ROBIN
+    const float monteCarloNormalization = 1.0f / (float)g_SampleCount / (float)numLightsInCell;
+    #else
     const float monteCarloNormalization = 1.0f / (float)g_SampleCount;
+    #endif
+
     for (uint channel = 0; channel < SH_COLOR_CHANNELS; ++channel)
     {
         for (uint i = 0; i < SH_COEFFICIENTS_PER_CHANNEL; ++i)
         {
+            #ifdef LIGHT_SAMPLING_ROUND_ROBIN
+            float result = accumulatedRadianceSH[i][channel] * monteCarloNormalization;
+            // If we are past the first iteration, we want to accumulate into the buffer rather than overwriting the current value.
+            if (g_LightIndexInCell > 0)
+                result += g_RadianceShl2[SHIndex(outProbeIdx, channel, i)];
+            g_RadianceShl2[SHIndex(outProbeIdx, channel, i)] = result;
+            #else
             g_RadianceShl2[SHIndex(outProbeIdx, channel, i)] = accumulatedRadianceSH[i][channel] * monteCarloNormalization;
+            #endif
         }
     }
 }

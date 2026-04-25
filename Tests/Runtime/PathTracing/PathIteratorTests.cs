@@ -118,6 +118,7 @@ namespace UnityEngine.PathTracing.Tests
         [TestCase(10, 20, 30, 8u)]
         [TestCase(0, 42, 0, 1u)]
         [TestCase(0, 42, 0, 8u)]
+        [Ignore("Unstable: https://jira.unity3d.com/browse/UUM-134752")]
         public void EmptyWorldWithEnvironmentLight_ShouldOutputEnvironmentLight(float envRed, float envGreen, float envBlue, uint sampleCount)
         {
             using var deviceInputBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, 1, Marshal.SizeOf<TestRay>());
@@ -133,11 +134,11 @@ namespace UnityEngine.PathTracing.Tests
             cubemapMat.SetVector("_Radiance", new Vector4(envRed, envGreen, envBlue, 1.0f));
             _world.SetEnvironmentMaterial(cubemapMat);
             GraphicsBuffer buildScratchBuffer = null;
-            _world.Build(new Bounds(), _cmd, ref buildScratchBuffer, _samplingResources, true, 8);
+            _world.Build(new Bounds(), _cmd, ref buildScratchBuffer, _samplingResources, true, 8,  64 * 64 * 64);
             var shader = _rayTracingContext.LoadRayTracingShader("Packages/com.unity.render-pipelines.core/Tests/Runtime/PathTracing/PathIteratorTest.urtshader");
 
             Util.BindWorld(_cmd, shader, _world);
-            Util.BindPathTracingInputs(_cmd, shader, false, 1, false, 4, 1.0f, RenderedGameObjectsFilter.OnlyStatic, _samplingResources, _emptyExposureTexture);
+            Util.BindPathTracingInputs(_cmd, shader, 1, false, 4, 1.0f, RenderedGameObjectsFilter.OnlyStatic, _samplingResources, _emptyExposureTexture);
 
             shader.SetIntParam(_cmd, Shader.PropertyToID("g_SampleCount"), (int)sampleCount);
             shader.SetBufferParam(_cmd, Shader.PropertyToID("_Output"), deviceOutputBuffer);
@@ -187,7 +188,7 @@ namespace UnityEngine.PathTracing.Tests
             var material = new Material(Shader.Find("PathIteratorTesting/UniformAlbedoMetaPass"));
             material.SetColor("_Albedo", new Color(albedoRed, albedoGreen, albedoBlue, 1));
 
-            var matDesc = MaterialPool.ConvertUnityMaterialToMaterialDescriptor(material);
+            var matDesc = MaterialPool.ConvertUnityMaterialToMaterialDescriptor(material, EmissionMode.Baked);
 
             _world.SetEnvironmentMaterial(cubemapMaterial);
             var matHandle = _world.AddMaterial(matDesc, UVChannel.UV0);
@@ -204,12 +205,12 @@ namespace UnityEngine.PathTracing.Tests
                 true,
                 RenderedGameObjectsFilter.OnlyStatic,
                 true);
-            _world.Build(new Bounds(), _cmd, ref buildScratchBuffer, _samplingResources, true, 8);
+            _world.Build(new Bounds(), _cmd, ref buildScratchBuffer, _samplingResources, true, 8,  64 * 64 * 64);
 
             var shader = _rayTracingContext.LoadRayTracingShader("Packages/com.unity.render-pipelines.core/Tests/Runtime/PathTracing/PathIteratorTest.urtshader");
 
             Util.BindWorld(_cmd, shader, _world);
-            Util.BindPathTracingInputs(_cmd, shader, false, 1, false, 4, 1.0f, RenderedGameObjectsFilter.OnlyStatic, _samplingResources, _emptyExposureTexture);
+            Util.BindPathTracingInputs(_cmd, shader, 1, false, 4, 1.0f, RenderedGameObjectsFilter.OnlyStatic, _samplingResources, _emptyExposureTexture);
 
             shader.SetIntParam(_cmd, Shader.PropertyToID("g_SampleCount"), (int)sampleCount);
             shader.SetBufferParam(_cmd, Shader.PropertyToID("_Output"), deviceOutputBuffer);

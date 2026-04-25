@@ -18,6 +18,8 @@ namespace UnityEngine.PathTracing.Core
         }
 
         private Material _material;
+        private Shader _lastUsedShader;
+        private LocalKeyword? _noSunKeyword;
         private Color _color = Color.black;
         private readonly Mesh _skyboxMesh;
         private readonly Mesh _sixFaceSkyboxMesh;
@@ -74,8 +76,10 @@ namespace UnityEngine.PathTracing.Core
             return cct * filter * light.intensity;
         }
 
-        public void Update(CommandBuffer cmd, Light sun, int resolution)
+        public void Update(CommandBuffer cmd, Light sun, int resolution, out bool viewAndProjectionMatricesChanged)
         {
+            viewAndProjectionMatricesChanged = false;
+
             int newHash = ((int)_mode) + 1;
             if (_mode == Mode.Color)
             {
@@ -98,7 +102,7 @@ namespace UnityEngine.PathTracing.Core
                     }
 
                     if (newHash != _hash)
-                        RenderWithMaterial(cmd, sun, resolution);
+                        RenderWithMaterial(cmd, sun, resolution, out viewAndProjectionMatricesChanged);
                 }
                 else
                 {
@@ -136,14 +140,9 @@ namespace UnityEngine.PathTracing.Core
             }
         }
 
-        private void RenderWithMaterial(CommandBuffer cmd, Light sun, int cubemapResolution)
+        private void RenderWithMaterial(CommandBuffer cmd, Light sun, int cubemapResolution, out bool viewAndProjectionMatricesChanged)
         {
             EnsureCubemapExistsWithParticularResolution(cubemapResolution);
-
-            // We don't want to render  a (procedural) sun in our skybox for path tracing as it's already sampled as direct light
-            bool isSunDisabled = _material.IsKeywordEnabled("_SUNDISK_NONE");
-            if (!isSunDisabled)
-                _material.EnableKeyword("_SUNDISK_NONE");
 
             var properties = new MaterialPropertyBlock();
             if (sun != null)
@@ -156,6 +155,16 @@ namespace UnityEngine.PathTracing.Core
                 properties.SetVector(Shader.PropertyToID("_LightColor0"), Color.black);
                 properties.SetVector(Shader.PropertyToID("_WorldSpaceLightPos0"), new Vector4(0, 0, -1, 0));
             }
+
+            if (_lastUsedShader != _material.shader)
+            {
+                var keyword = _material.shader.keywordSpace.FindKeyword("_SUNDISK_NONE");
+                _noSunKeyword = keyword.isValid ? keyword : null;
+                _lastUsedShader = _material.shader;
+            }
+
+            if (_noSunKeyword.HasValue)
+                cmd.EnableKeyword(_material, _noSunKeyword.Value);
 
             for (int faceIndex = 0; faceIndex < 6; ++faceIndex)
             {
@@ -186,8 +195,10 @@ namespace UnityEngine.PathTracing.Core
 #endif
             }
 
-            if (!isSunDisabled)
-                _material.DisableKeyword("_SUNDISK_NONE");
+            viewAndProjectionMatricesChanged = true;
+
+            if (_noSunKeyword.HasValue)
+                cmd.DisableKeyword(_material, _noSunKeyword.Value);
         }
 
         private void EnsureCubemapExistsWithParticularResolution(int resolution)

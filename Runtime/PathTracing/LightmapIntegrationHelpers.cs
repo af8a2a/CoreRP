@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using Unity.Mathematics;
+using Unity.Profiling;
+using Unity.Profiling.LowLevel;
 using UnityEngine.Assertions;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.UnifiedRayTracing;
@@ -11,6 +13,14 @@ namespace UnityEngine.PathTracing.Lightmapping
 {
     internal static class LightmapIntegrationHelpers
     {
+        /// <summary>
+        /// Profiles the box filtering pass applied to the blue channel of the lightmap output,
+        /// used to smooth validity values through an indirect compute dispatch.
+        /// </summary>
+        static readonly ProfilerMarker k_BoxFiltering =
+            new ProfilerMarker(ProfilerCategory.Render, "BoxFiltering",
+                MarkerFlags.Default | MarkerFlags.SampleGPU);
+
         internal class ComputeHelpers
         {
             internal ComputeShader ComputeHelperShader = null;
@@ -37,6 +47,13 @@ namespace UnityEngine.PathTracing.Lightmapping
                 public static readonly int TemporaryRenderTarget = Shader.PropertyToID("g_TemporaryRenderTarget");
                 public static readonly int SecondTemporaryRenderTarget = Shader.PropertyToID("g_SecondTemporaryRenderTarget");
                 public static readonly int MultiplyTemporaryRenderTarget = Shader.PropertyToID("g_MultiplyTemporaryRenderTarget");
+                public static readonly int DestinationTexture = Shader.PropertyToID("g_DestinationTexture");
+                public static readonly int SourceX = Shader.PropertyToID("g_SourceX");
+                public static readonly int SourceY = Shader.PropertyToID("g_SourceY");
+                public static readonly int SourceWidth = Shader.PropertyToID("g_SourceWidth");
+                public static readonly int SourceHeight = Shader.PropertyToID("g_SourceHeight");
+                public static readonly int DestinationX = Shader.PropertyToID("g_DestinationX");
+                public static readonly int DestinationY = Shader.PropertyToID("g_DestinationY");
             }
 
             internal static int MultiplyKernel;
@@ -48,6 +65,24 @@ namespace UnityEngine.PathTracing.Lightmapping
             internal static int StandardErrorThresholdKernel;
             internal static int GetValueKernel;
             internal static int NormalizeByAlphaKernel;
+            internal static int CopyTextureAdditiveKernel;
+            internal static int MaskAlphaChannelKernel;
+
+#if UNITY_EDITOR
+            [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterAssembliesLoaded)]
+            static void ResetStaticsOnLoad()
+            {
+                MultiplyKernel = -1;
+                BroadcastChannelKernel = -1;
+                SetChannelKernel = -1;
+                ReferenceBoxFilterKernel = -1;
+                ReferenceBoxFilterBlueChannelKernel = -1;
+                StandardErrorKernel = -1;
+                StandardErrorThresholdKernel = -1;
+                GetValueKernel = -1;
+                NormalizeByAlphaKernel = -1;
+            }
+#endif
 
             public void Load()
             {
@@ -66,7 +101,37 @@ namespace UnityEngine.PathTracing.Lightmapping
                     StandardErrorThresholdKernel = ComputeHelperShader.FindKernel("StandardErrorThreshold");
                     GetValueKernel = ComputeHelperShader.FindKernel("GetValue");
                     NormalizeByAlphaKernel = ComputeHelperShader.FindKernel("NormalizeByAlpha");
+                    CopyTextureAdditiveKernel = ComputeHelperShader.FindKernel("CopyTextureAdditive");
+                    MaskAlphaChannelKernel = ComputeHelperShader.FindKernel("MaskAlphaChannel");
                 }
+            }
+
+            public void CopyTextureAdditive(CommandBuffer cmd, RenderTargetIdentifier source, RenderTargetIdentifier destination,
+                int width, int height, int sourceX = 0, int sourceY = 0, int destinationX = 0, int destinationY = 0)
+            {
+                cmd.BeginSample("CopyTextureAdditive");
+                cmd.SetComputeTextureParam(ComputeHelperShader, CopyTextureAdditiveKernel, ShaderIDs.SourceTexture, source);
+                cmd.SetComputeTextureParam(ComputeHelperShader, CopyTextureAdditiveKernel, ShaderIDs.DestinationTexture, destination);
+                cmd.SetComputeIntParam(ComputeHelperShader, ShaderIDs.SourceWidth, width);
+                cmd.SetComputeIntParam(ComputeHelperShader, ShaderIDs.SourceHeight, height);
+                cmd.SetComputeIntParam(ComputeHelperShader, ShaderIDs.SourceX, sourceX);
+                cmd.SetComputeIntParam(ComputeHelperShader, ShaderIDs.SourceY, sourceY);
+                cmd.SetComputeIntParam(ComputeHelperShader, ShaderIDs.DestinationX, destinationX);
+                cmd.SetComputeIntParam(ComputeHelperShader, ShaderIDs.DestinationY, destinationY);
+                ComputeHelperShader.GetKernelThreadGroupSizes(CopyTextureAdditiveKernel, out uint groupX, out uint groupY, out _);
+                cmd.DispatchCompute(ComputeHelperShader, CopyTextureAdditiveKernel, GraphicsHelpers.DivUp(width, groupX), GraphicsHelpers.DivUp(height, groupY), 1);
+                cmd.EndSample("CopyTextureAdditive");
+            }
+
+            public void MaskAlphaChannel(CommandBuffer cmd, RenderTargetIdentifier texture, int width, int height)
+            {
+                cmd.BeginSample("MaskAlphaChannel");
+                cmd.SetComputeTextureParam(ComputeHelperShader, MaskAlphaChannelKernel, ShaderIDs.TextureInOut, texture);
+                cmd.SetComputeIntParam(ComputeHelperShader, ShaderIDs.TextureWidth, width);
+                cmd.SetComputeIntParam(ComputeHelperShader, ShaderIDs.TextureHeight, height);
+                ComputeHelperShader.GetKernelThreadGroupSizes(MaskAlphaChannelKernel, out uint groupX, out uint groupY, out _);
+                cmd.DispatchCompute(ComputeHelperShader, MaskAlphaChannelKernel, GraphicsHelpers.DivUp(width, groupX), GraphicsHelpers.DivUp(height, groupY), 1);
+                cmd.EndSample("MaskAlphaChannel");
             }
         }
 
@@ -128,10 +193,12 @@ namespace UnityEngine.PathTracing.Lightmapping
             switch (integratedOutputType)
             {
                 case IntegratedOutputType.Direct: return "irradianceDirect";
+                case IntegratedOutputType.DirectBRDF: return "irradianceDirectBRDF";
                 case IntegratedOutputType.Indirect: return "irradianceIndirect";
                 case IntegratedOutputType.AO: return "ambientOcclusion";
                 case IntegratedOutputType.Validity: return "validity";
                 case IntegratedOutputType.DirectionalityDirect: return "directionalityDirect";
+                case IntegratedOutputType.DirectionalityDirectBRDF: return "directionalityDirectBRDF";
                 case IntegratedOutputType.DirectionalityIndirect: return "directionalityIndirect";
                 case IntegratedOutputType.ShadowMask: return "shadowmask";
                 default:
@@ -171,6 +238,21 @@ namespace UnityEngine.PathTracing.Lightmapping
         {
             return WriteLightmap(cmd, renderTex, IntegratedOutputTypeToComponentName(integratedOutputType),
                 lightmapIndex, path);
+        }
+
+        public static Texture2D ReadLightmap(IntegratedOutputType integratedOutputType, int lightmapIndex, string path)
+        {
+#if ENABLE_IMAGECONVERSION_MODULE
+            Texture2D tex = new(2, 2);
+            byte[] bytes = File.ReadAllBytes(BuildLightmapComponentPath(IntegratedOutputTypeToComponentName(integratedOutputType), lightmapIndex, path));
+            bool ret = ImageConversion.LoadImage(tex, bytes);
+            if (!ret)
+                return null;
+            return tex;
+#else
+            Debug.Assert(false, "The Image Conversion Module is not available.");
+            return null;
+#endif
         }
 
         private static void OutputUIntRequestData(string prefix, AsyncGPUReadbackRequest request)
@@ -437,7 +519,7 @@ namespace UnityEngine.PathTracing.Lightmapping
 
         public static void ReferenceBoxFilterBlueChannelRenderTexture(CommandBuffer cmd, ComputeShader referenceBoxFilterBlueChannelShader, int referenceBoxFilterBlueChannelKernel, RenderTargetIdentifier inOut, int width, int height, int radius, GraphicsBuffer indirectDispatchBuffer)
         {
-            cmd.BeginSample("BoxFiltering");
+            cmd.BeginSample(k_BoxFiltering);
             cmd.GetTemporaryRT(ComputeHelpers.ShaderIDs.TextureOut, width, height, 0, FilterMode.Point, RenderTextureFormat.ARGBFloat, RenderTextureReadWrite.Linear, 1, true);
             cmd.SetComputeTextureParam(referenceBoxFilterBlueChannelShader, referenceBoxFilterBlueChannelKernel, ComputeHelpers.ShaderIDs.SourceTexture, inOut);
             cmd.SetComputeTextureParam(referenceBoxFilterBlueChannelShader, referenceBoxFilterBlueChannelKernel, ComputeHelpers.ShaderIDs.TextureOut, ComputeHelpers.ShaderIDs.TextureOut);
@@ -447,7 +529,7 @@ namespace UnityEngine.PathTracing.Lightmapping
             cmd.DispatchCompute(referenceBoxFilterBlueChannelShader, referenceBoxFilterBlueChannelKernel, indirectDispatchBuffer, 0);
             cmd.CopyTexture(ComputeHelpers.ShaderIDs.TextureOut, inOut); // TODO(jesper): dont do copy
             cmd.ReleaseTemporaryRT(ComputeHelpers.ShaderIDs.TextureOut);
-            cmd.EndSample("BoxFiltering");
+            cmd.EndSample(k_BoxFiltering);
         }
 
         // Computes the region of a lightmap that is occupied by the pixels of a specific instance,

@@ -218,12 +218,23 @@ namespace UnityEngine.Rendering
             /// </summary>
             internal bool keepLayoutWhenHidden { private get; set; }
 
+            internal bool m_IsHiddenBySearchFilter;
+
+            internal string m_AdditionalSearchText = string.Empty;
+
             protected internal bool m_RequiresLegacyStateHandling = false;
 
             void UpdateElementVisibility()
             {
+                if (m_IsHiddenBySearchFilter)
+                {
+                    m_VisualElement.style.display = DisplayStyle.None;
+                    return;
+                }
+
                 if (keepLayoutWhenHidden)
                 {
+                    m_VisualElement.style.display = DisplayStyle.Flex;
                     m_VisualElement.style.visibility = isHidden ? Visibility.Hidden : Visibility.Visible;
                 }
                 else
@@ -297,22 +308,19 @@ namespace UnityEngine.Rendering
                 m_Context = context;
                 m_VisualElement = Create();
 
-                //Debug.Log($"ToVisualElement for {queryPath}");
-
                 if (m_VisualElement == null)
                 {
                     Debug.LogWarning($"Unable to create a Visual Element for type {GetType()}");
                     return null;
                 }
                 m_VisualElement.AddToClassList("unity-inspector-element");
-
+                m_VisualElement.name = displayName;
 
 #if UNITY_EDITOR
                 // Support for legacy state handling
                 if (this is ISupportsLegacyStateHandling legacyStateWidget)
                 {
                     m_RequiresLegacyStateHandling = legacyStateWidget.RequiresLegacyStateHandling();
-                    //Debug.Log($"LegacyState: {m_RequiresLegacyStateHandling} ({queryPath})");
                 }
 #endif
 
@@ -550,6 +558,7 @@ namespace UnityEngine.Rendering
                     text = displayName
                 };
                 button.AddToClassList("debug-window-button");
+                button.AddToClassList("debug-window-search-filter-target");
                 button.clicked += () => action();
                 return button;
             }
@@ -580,6 +589,7 @@ namespace UnityEngine.Rendering
 
                 var nameLabel = new Label() { text = displayName };
                 nameLabel.AddToClassList("debug-window-value-name");
+                nameLabel.AddToClassList("debug-window-search-filter-target");
 
                 var valueLabel = new Label() { text = FormatString(GetValue()) };
                 valueLabel.AddToClassList("debug-window-value-value");
@@ -737,6 +747,7 @@ namespace UnityEngine.Rendering
                 valueContainer.AddToClassList("debug-window-valuetuple");
 
                 var label = new Label(displayName) { style = { minWidth = ValueTuple.GetLabelWidth(m_Context) }, };
+                label.AddToClassList("debug-window-search-filter-target");
 
                 if (isHeader)
                     label.style.unityFontStyleAndWeight = FontStyle.Bold;
