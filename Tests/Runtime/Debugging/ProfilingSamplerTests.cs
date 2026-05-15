@@ -1,14 +1,15 @@
 using System.Collections;
+using System.Diagnostics;
 using NUnit.Framework;
-using UnityEngine;
-using UnityEngine.TestTools;
-using Unity.Profiling;
 using Unity.Profiling.LowLevel;
+using UnityEngine.TestTools;
 
 namespace UnityEngine.Rendering.Tests
 {
     class ProfilingSamplerTests
     {
+        const int k_FrameCount = 4;
+
         ProfilingSampler m_Sampler;
 
         [SetUp]
@@ -21,6 +22,17 @@ namespace UnityEngine.Rendering.Tests
         public void TearDown()
         {
             m_Sampler.enableRecording = false;
+        }
+
+        static void WaitAtLeastMs(int milliseconds)
+        {
+            var sw = Stopwatch.StartNew();
+            while (sw.ElapsedMilliseconds < milliseconds)
+            {
+#if !UNITY_WEBGL
+                System.Threading.Thread.Sleep(milliseconds);
+#endif
+            }
         }
 
         [Test]
@@ -44,9 +56,11 @@ namespace UnityEngine.Rendering.Tests
             var sampler = ProfilingSampler.Create("CreatedMarker", MarkerFlags.Default);
             Assert.IsNotNull(sampler);
             Assert.IsTrue(sampler.IsValid());
+#if USE_RECORDER
             Assert.IsFalse(sampler.m_Recorder.Valid);
             Assert.IsFalse(sampler.m_GpuRecorder.Valid);
             Assert.IsFalse(sampler.m_InlineRecorder.Valid);
+#endif
         }
 
         [Test]
@@ -54,10 +68,12 @@ namespace UnityEngine.Rendering.Tests
         {
             var sampler = ProfilingSampler.Create("FlagsMarker", MarkerFlags.VerbosityAdvanced);
             Assert.IsTrue(sampler.IsValid());
+#if USE_RECORDER
             // Recorders are allocated lazily; none should be valid before enableRecording = true.
             Assert.IsFalse(sampler.m_Recorder.Valid);
             Assert.IsFalse(sampler.m_GpuRecorder.Valid);
             Assert.IsFalse(sampler.m_InlineRecorder.Valid);
+#endif
         }
 
         [Test]
@@ -113,6 +129,7 @@ namespace UnityEngine.Rendering.Tests
             Assert.AreEqual(0,    m_Sampler.inlineCpuSampleCount);
         }
 
+#if USE_RECORDER
         // Bits 10-12 all zero → SampleGPU auto-added → GpuRecorder is created on first enableRecording = true
         [Test]
         public void SampleGPU_AutoAdded_ForUserFacingMarker()
@@ -165,14 +182,14 @@ namespace UnityEngine.Rendering.Tests
         }
 
         [UnityTest]
-        [Ignore("Unstable: https://jira.unity3d.com/browse/UUM-138435")]
         public IEnumerator EnableRecording_InlineCpuElapsedTime_IsGreaterThanZero()
         {
             m_Sampler.enableRecording = true;
 
-            for (int i = 0; i < 2; i++)
+            for (int i = 0; i < k_FrameCount; i++)
             {
                 m_Sampler.Begin(null);
+                WaitAtLeastMs(1);
                 m_Sampler.End(null);
                 yield return null;
             }
@@ -182,16 +199,15 @@ namespace UnityEngine.Rendering.Tests
         }
 
         [UnityTest]
-        [Ignore("Unstable: https://jira.unity3d.com/browse/UUM-138435")]
         public IEnumerator ProfilingScope_InlineCpuElapsedTime_IsGreaterThanZero()
         {
             m_Sampler.enableRecording = true;
 
-            for (int i = 0; i < 2; i++)
+            for (int i = 0; i < k_FrameCount; i++)
             {
                 using (new ProfilingScope(m_Sampler))
                 {
-                    // measured scope
+                    WaitAtLeastMs(1);
                 }
                 yield return null;
             }
@@ -206,10 +222,12 @@ namespace UnityEngine.Rendering.Tests
             m_Sampler.enableRecording = true;
 
             var texture = new Texture2D(1, 1) { name = "TestTexture" };
-            for (int i = 0; i < 2; i++)
+            for (int i = 0; i < k_FrameCount; i++)
             {
                 using (new ProfilingScope(m_Sampler, texture))
-                { }
+                {
+                    WaitAtLeastMs(1);
+                }
                 yield return null;
             }
             UnityEngine.Object.DestroyImmediate(texture);
@@ -245,5 +263,6 @@ namespace UnityEngine.Rendering.Tests
                 sampler.Dispose(); // recorders are no longer .Valid after first dispose
             });
         }
+#endif
     }
 }

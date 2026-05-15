@@ -782,7 +782,7 @@ namespace UnityEngine.Rendering
 
 
             // Space-delimit PascalCase (https://stackoverflow.com/questions/155303/net-how-can-you-split-a-caps-delimited-string-into-an-array)
-            static Regex s_NicifyRegEx = new("([a-z](?=[A-Z])|[A-Z](?=[A-Z][a-z]))", RegexOptions.Compiled);
+            static readonly Regex s_NicifyRegEx = new("([a-z](?=[A-Z])|[A-Z](?=[A-Z][a-z]))", RegexOptions.Compiled);
 
             /// <summary>
             /// Automatically fills the enum names with a given <see cref="Type"/>
@@ -875,8 +875,11 @@ namespace UnityEngine.Rendering
 
                 this.ScheduleTracked(field, () => field.schedule.Execute(() =>
                 {
-                    if (currentIndex >= 0 && currentIndex < enumNames.Length)
-                        field.SetValueWithoutNotify(enumNames[currentIndex].text);
+                    // https://jira.unity3d.com/browse/UUM-138138: Clamp currentIndex to 0. This matches old IMGUI
+                    // DebugUIDrawer behavior where a negative index is sometimes used to denote an invalid/none value.
+                    int index = Mathf.Max(0, currentIndex);
+                    if (index < enumNames.Length)
+                        field.SetValueWithoutNotify(enumNames[index].text);
                 }).Every(100));
 
                 m_AdditionalSearchText = string.Join(",", field.choices);

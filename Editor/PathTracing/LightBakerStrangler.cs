@@ -405,13 +405,13 @@ namespace UnityEditor.PathTracing.LightBakerBridge
         {
             ulong workSteps = 0;
             if (outputTypeMask.HasFlag(ProbeRequestOutputType.RadianceIndirect))
-                workSteps += ProbeIntegrator.CalculateWorkSteps(count, effectiveIndirectSampleCount, bounceCount);
+                workSteps += ProbeIntegrator.CalculateWorkStepsIndirectRadiance(count, effectiveIndirectSampleCount, bounceCount);
             if (outputTypeMask.HasFlag(ProbeRequestOutputType.RadianceDirect))
-                workSteps += ProbeIntegrator.CalculateWorkSteps(count, directSampleCount, 0);
+                workSteps += ProbeIntegrator.CalculateWorkStepsDirectRadiance(count, directSampleCount);
             if (outputTypeMask.HasFlag(ProbeRequestOutputType.Validity))
-                workSteps += ProbeIntegrator.CalculateWorkSteps(count, effectiveIndirectSampleCount, 0);
+                workSteps += ProbeIntegrator.CalculateWorkStepsOcclusion(count, effectiveIndirectSampleCount);
             if (outputTypeMask.HasFlag(ProbeRequestOutputType.LightProbeOcclusion) && usesProbeOcclusion)
-                workSteps += ProbeIntegrator.CalculateWorkSteps(count, effectiveIndirectSampleCount, 0);
+                workSteps += ProbeIntegrator.CalculateWorkStepsValidity(count, effectiveIndirectSampleCount);
 
             return workSteps;
         }
@@ -476,7 +476,7 @@ namespace UnityEditor.PathTracing.LightBakerBridge
             // environment, we base the sample count on the number of emissive and environment lights.
             uint emissiveAndEnvLightCount = (uint)world.EnvLightCount + (uint)world.MeshLightCount;
             uint brdfSampleCount = emissiveAndEnvLightCount * lightingSettings.lightmapSampleCounts.directSampleCount;
-            if (lightingSettings.directEmissiveSamplingMode == EmissiveSamplingMode.LightSampling)
+            if (lightingSettings.directEmissiveSamplingMode == UnityEngine.PathTracing.Core.EmissiveSamplingMode.LightSampling)
                 brdfSampleCount = 0;
 
             // Lightmap settings

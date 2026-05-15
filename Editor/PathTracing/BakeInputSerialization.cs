@@ -5,7 +5,6 @@ using System.Runtime.InteropServices;
 using Unity.Mathematics;
 using UnityEngine;
 using Unity.Collections.LowLevel.Unsafe;
-using UnityEditor.LightBaking;
 using MixedLightingMode = UnityEngine.MixedLightingMode;
 
 // The types defined in this file should match the types defined in BakeInput.h.
@@ -254,14 +253,14 @@ namespace UnityEditor.PathTracing.LightBakerBridge
         public float aoDistance;
         public bool useHardwareRayTracing;
 
-        public LightSamplingMode directLightSamplingMode;
+        public UnityEngine.PathTracing.Core.LightSamplingMode directLightSamplingMode;
         public uint directRISCandidateCount;
-        public LightSamplingMode indirectLightSamplingMode;
+        public UnityEngine.PathTracing.Core.LightSamplingMode indirectLightSamplingMode;
         public UInt32 indirectRISCandidateCount;
         public LightAccelerationStructure lightAccelerationStructure;
         public uint lightGridMaxCells;
-        public EmissiveSamplingMode directEmissiveSamplingMode;
-        public EmissiveSamplingMode indirectEmissiveSamplingMode;
+        public UnityEngine.PathTracing.Core.EmissiveSamplingMode directEmissiveSamplingMode;
+        public UnityEngine.PathTracing.Core.EmissiveSamplingMode indirectEmissiveSamplingMode;
 
         public void Transfer(IBakeInputVisitor visitor)
         {
@@ -734,11 +733,11 @@ namespace UnityEditor.PathTracing.LightBakerBridge
             // TODO: We need to change the naming of the entries in the enum see: https://jira.unity3d.com/browse/GFXFEAT-728
             switch (tilingMode)
             {
-                case TilingMode.None: bufferSize = 1048576; break;                     // UI: Highest Performance
-                case TilingMode.Quarter: bufferSize = 524288; break;                   // UI: High Performance
-                case TilingMode.Sixteenth: bufferSize = 262144; break;                 // UI: Automatic     (but it is not automatic)
-                case TilingMode.Sixtyfourth: bufferSize = 131072; break;               // UI: Low Memory Usage
-                case TilingMode.TwoHundredFiftySixth: bufferSize = 65536; break;       // UI: Lowest Memory Usage
+                case TilingMode.None: bufferSize = 2097152; break;                     // UI: Highest Performance
+                case TilingMode.Quarter: bufferSize = 1048576; break;                  // UI: High Performance
+                case TilingMode.Sixteenth: bufferSize = 524288; break;                 // UI: Automatic
+                case TilingMode.Sixtyfourth: bufferSize = 262144; break;               // UI: Low Memory Usage
+                case TilingMode.TwoHundredFiftySixth: bufferSize = 131072; break;      // UI: Lowest Memory Usage
                 default: Debug.Assert(false, "Unknown tiling mode."); break;
             }
             return math.max(bufferSize, kMinBufferSize);

@@ -91,6 +91,9 @@ namespace UnityEngine.Rendering.RenderGraphModule
             defaultShadowTexture = renderGraph.ImportTexture(m_ShadowTexture2D, true);
             defaultShadowArrayTexture = renderGraph.ImportTexture(m_ShadowTextureArray2D, true);
 
+            if (!TextureXR.initialized)
+                return;
+
             clearTextureXR = renderGraph.ImportTexture(TextureXR.GetClearTexture(), true);
             magentaTextureXR = renderGraph.ImportTexture(TextureXR.GetMagentaTexture(), true);
             blackTextureXR = renderGraph.ImportTexture(TextureXR.GetBlackTexture(), true);

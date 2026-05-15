@@ -7,6 +7,7 @@
 #include "Packages/com.unity.render-pipelines.core/Runtime/PathTracing/MaterialPool/MaterialPool.hlsl"
 #include "Common.hlsl"
 #include "PatchUtil.hlsl"
+#include "PatchAllocationRequest.hlsl"
 #include "PunctualLights.hlsl"
 
 struct SurfaceGeometry
@@ -227,14 +228,13 @@ float3 OutgoingDirectionalBounceAndMultiBounceRadiance(
     float3 dirLightDirection,
     float3 dirLightIntensity,
     bool multiBounce,
-    IrradianceBufferType patchIrradiances,
+    PatchIrradianceBufferType patchIrradiances,
     CellPatchIndexBufferType cellPatchIndices,
     PatchUtil::VolumeParamSet volumeParams,
     float3 albedo,
     float3 emission,
-    out bool multiBounceSurfaceCacheMiss)
+    out uint bouncePatchIndex)
 {
-    multiBounceSurfaceCacheMiss = false;
     float3 radiance = 0.0f;
 
     if (any(dirLightIntensity != 0.0f))
@@ -248,21 +248,20 @@ float3 OutgoingDirectionalBounceAndMultiBounceRadiance(
             shadowRay.tMin = 0;
             shadowRay.tMax = FLT_MAX;
 
-            UnifiedRT::Hit hitResult2 = UnifiedRT::TraceRayClosestHit(dispatchInfo, accelStruct, 0xFFFFFFFF, shadowRay, UnifiedRT::kRayFlagNone);
-            if (!hitResult2.IsValid())
+            UnifiedRT::Hit hitResult = UnifiedRT::TraceRayClosestHit(dispatchInfo, accelStruct, 0xFFFFFFFF, shadowRay, UnifiedRT::kRayFlagNone);
+            if (!hitResult.IsValid())
             {
                 radiance += dirLightIntensity * dot(-dirLightDirection, normal);
             }
         }
     }
 
+    bouncePatchIndex = PatchUtil::invalidPatchIndex;
     if (multiBounce)
     {
-        float3 cacheRead = PatchUtil::ReadPlanarIrradiance(patchIrradiances, cellPatchIndices, volumeParams, position, normal);
-        if (all(cacheRead != PatchUtil::invalidIrradiance))
-            radiance += cacheRead;
-        else
-            multiBounceSurfaceCacheMiss = true;
+        bouncePatchIndex = PatchUtil::FindPatchIndex(volumeParams, cellPatchIndices, position, normal);
+        if (bouncePatchIndex != PatchUtil::invalidPatchIndex)
+            radiance += PatchUtil::EvalIrradiance(patchIrradiances[bouncePatchIndex], normal);
     }
 
     radiance *= albedo * INV_PI;
@@ -270,7 +269,7 @@ float3 OutgoingDirectionalBounceAndMultiBounceRadiance(
     return radiance;
 }
 
-float3 IncomingEnviromentAndDirectionalBounceAndMultiBounceRadiance(
+float3 IncomingEnvironmentAndDirectionalBounceAndMultiBounceRadiance(
     UnifiedRT::DispatchInfo dispatchInfo,
     UnifiedRT::RayTracingAccelStruct accelStruct,
     UnifiedRT::Ray ray,
@@ -279,11 +278,13 @@ float3 IncomingEnviromentAndDirectionalBounceAndMultiBounceRadiance(
     float3 dirLightIntensity,
     bool multiBounce,
     TextureCube<float3> envTex,
+    float envIntensityMultiplier,
     SamplerState envSampler,
-    IrradianceBufferType patchIrradiances,
-    PatchGeometryBufferType patchGeometries,
+    PatchIrradianceBufferType patchIrradiances,
     RWStructuredBuffer<PatchUtil::PatchStatisticsSet> patchStatistics,
-    PatchUtil::PatchAllocationParamSet allocParams,
+    RWStructuredBuffer<PatchAllocationRequest> allocationRequests,
+    RWStructuredBuffer<uint> allocationRequestCount,
+    CellPatchIndexBufferType cellPatchIndices,
     PatchUtil::VolumeParamSet volumeParams,
     bool enablePatchAllocation,
     uint frameIndex)
@@ -304,7 +305,7 @@ float3 IncomingEnviromentAndDirectionalBounceAndMultiBounceRadiance(
             const float3 hitAlbedo = MaterialPool::LoadAlbedoWithBoost(matEntry, matPoolParams.albedoTextures, matPoolParams.albedoSampler, matPoolParams.atlasTexelSize, matPoolParams.albedoBoost, hitGeo.uv0, hitGeo.uv1);
             const float3 hitEmission = MaterialPool::LoadEmission(matEntry, matPoolParams.emissionTextures, matPoolParams.emissionSampler, matPoolParams.atlasTexelSize, hitGeo.uv0, hitGeo.uv1);
 
-            bool multiBounceSurfaceCacheMiss = false;
+            uint bouncePatchIndex;
             radiance = OutgoingDirectionalBounceAndMultiBounceRadiance(
                 hitGeo.position,
                 hitGeo.normal,
@@ -314,31 +315,41 @@ float3 IncomingEnviromentAndDirectionalBounceAndMultiBounceRadiance(
                 dirLightIntensity,
                 multiBounce,
                 patchIrradiances,
-                allocParams.cellPatchIndices,
+                cellPatchIndices,
                 volumeParams,
                 hitAlbedo,
                 hitEmission,
-                multiBounceSurfaceCacheMiss);
+                bouncePatchIndex);
 
-            #if BOUNCE_PATCH_ALLOCATION
-            if (multiBounceSurfaceCacheMiss && enablePatchAllocation)
+            if (enablePatchAllocation)
             {
-                PatchUtil::AllocatePatch(
-                    hitGeo.position,
-                    hitGeo.normal,
-                    patchIrradiances,
-                    patchGeometries,
-                    patchStatistics,
-                    allocParams,
-                    volumeParams,
-                    frameIndex);
+                if (bouncePatchIndex == PatchUtil::invalidPatchIndex)
+                {
+                    uint requestIdx;
+                    InterlockedAdd(allocationRequestCount[0], 1, requestIdx);
+                    if (requestIdx < PatchAllocationRequestMax)
+                    {
+                        PatchAllocationRequest req;
+                        req.position = hitGeo.position;
+                        req.normal = hitGeo.normal;
+                        allocationRequests[requestIdx] = req;
+                    }
+                }
+                else
+                {
+                    PatchUtil::PatchCounterSet counters = patchStatistics[bouncePatchIndex].counters;
+                    if (PatchUtil::GetRank(counters) == 1)
+                    {
+                        PatchUtil::SetLastAccessFrame(counters, frameIndex);
+                        patchStatistics[bouncePatchIndex].counters = counters;
+                    }
+                }
             }
-            #endif
         }
     }
     else
     {
-        radiance = envTex.SampleLevel(envSampler, ray.direction, 0);
+        radiance = envIntensityMultiplier * envTex.SampleLevel(envSampler, ray.direction, 0);
     }
     return radiance;
 }

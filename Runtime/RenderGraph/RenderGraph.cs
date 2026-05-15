@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using Unity.Scripting.LifecycleManagement;
 using UnityEngine.Experimental.Rendering;
 using UnityEngine.Scripting.APIUpdating;
 // Typedef for the in-engine RendererList API (to avoid conflicts with the experimental version)
@@ -123,7 +124,6 @@ namespace UnityEngine.Rendering.RenderGraphModule
         internal RenderGraphPass executingPass;
         internal NativeRenderPassCompiler.CompilerContextData compilerContext;
         internal bool contextlessTesting;
-        internal bool forceResourceCreation;
     }
 
     // InternalRenderGraphContext is public (but all members are internal)
@@ -174,7 +174,8 @@ namespace UnityEngine.Rendering.RenderGraphModule
         ///<summary>Render Graph pool used for temporary data.</summary>
         public RenderGraphObjectPool renderGraphPool { get => wrappedContext.renderGraphPool; }
 
-        static internal RasterCommandBuffer rastercmd = new RasterCommandBuffer(null, null, false);
+        [NoAutoStaticsCleanup]
+        static internal readonly RasterCommandBuffer rastercmd = new RasterCommandBuffer(null, null, false);
 
         /// <inheritdoc />
         public void FromInternalContext(InternalRenderGraphContext context)
@@ -217,7 +218,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
         ///<summary>Render Graph pool used for temporary data.</summary>
         public RenderGraphObjectPool renderGraphPool { get => wrappedContext.renderGraphPool; }
 
-        static internal ComputeCommandBuffer computecmd = new ComputeCommandBuffer(null, null, false);
+        static internal readonly ComputeCommandBuffer computecmd = new ComputeCommandBuffer(null, null, false);
 
         /// <inheritdoc />
         public void FromInternalContext(InternalRenderGraphContext context)
@@ -260,7 +261,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
         ///<summary>Render Graph pool used for temporary data.</summary>
         public RenderGraphObjectPool renderGraphPool { get => wrappedContext.renderGraphPool; }
 
-        internal static UnsafeCommandBuffer unsCmd = new UnsafeCommandBuffer(null, null, false);
+        internal static readonly UnsafeCommandBuffer unsCmd = new UnsafeCommandBuffer(null, null, false);
         /// <inheritdoc />
         public void FromInternalContext(InternalRenderGraphContext context)
         {
@@ -387,7 +388,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
         // When a RenderGraph is created, an entry is added to this dictionary. When that RenderGraph renders something,
         // and a debug session is active, an entry is added to the list of executions for that RenderGraph using the executionId
         // as the key. So when you render multiple times with the same executionId, only one DebugExecutionItem is created.
-        static Dictionary<RenderGraph, List<DebugExecutionItem>> s_RegisteredExecutions = new ();
+        static readonly Dictionary<RenderGraph, List<DebugExecutionItem>> s_RegisteredExecutions = new ();
 
         #region Public Interface
         /// <summary>Name of the Render Graph.</summary>
@@ -1248,12 +1249,13 @@ namespace UnityEngine.Rendering.RenderGraphModule
 
             // With the actual implementation of the Frame Debugger, we cannot re-use resources during the same frame
             // or it breaks the rendering of the pass preview, since the FD copies the texture after the execution of the RG.
-            m_RenderGraphContext.forceResourceCreation =
+            // When disabled, this mode prevents resources released in the current frame from being reused until the next frame.
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-                FrameDebugger.enabled;
+            bool enableMemoryAliasing = !FrameDebugger.enabled;
 #else
-            false;
+            bool enableMemoryAliasing = true;
 #endif
+            m_Resources.EnableIntraFrameMemoryAliasing(enableMemoryAliasing);
         }
 
         /// <summary>
@@ -1652,6 +1654,33 @@ namespace UnityEngine.Rendering.RenderGraphModule
                 m_RenderGraphContext.cmd.SetGlobalTexture(globalTex.Key, defaultResources.blackTexture);
             }
         }
+
+        /// <summary>
+        /// Enables or disables intra-frame memory aliasing for render graph resources.
+        /// When enabled, resources released within the same execution can be immediately reused by subsequent passes.
+        /// When disabled, resources released in the current execution cannot be reused until the next execution.
+        /// Note: An execution corresponds to a single RenderGraph recording/execution cycle. Multiple executions can occur
+        /// within the same frame (e.g., Frame Debugger cascade-repaints, multiple cameras).
+        /// This is primarily used for testing purposes and for Frame Debugger compatibility.
+        /// </summary>
+        /// <param name="enabled">True to enable intra-frame memory aliasing, false to disable it.</param>
+        internal void SetIntraFrameMemoryAliasing(bool enabled)
+        {
+            m_Resources.EnableIntraFrameMemoryAliasing(enabled);
+        }
+
+#if UNITY_EDITOR
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterAssembliesLoaded)]
+        static void ResetStaticsOnLoad()
+        {
+            s_RegisteredExecutions.Clear();
+            s_EnableCompilationCachingForTests = null;
+            onGraphRegistered = null;
+            onGraphUnregistered = null;
+            onExecutionRegistered = null;
+            s_DebugSessionWasActive = false;
+        }
+#endif
     }
 
     /// <summary>

@@ -20,6 +20,8 @@ namespace UnityEngine.Rendering
         bool m_PortraitOrientation;
         bool m_IsDirty;
 
+        int m_UIVersion = 0;
+
         void Awake()
         {
             DebugManager.instance.onSetDirty -= RequestRecreateGUI;
@@ -38,11 +40,16 @@ namespace UnityEngine.Rendering
             m_PanelRenderer.RegisterUIReloadCallback(OnUIReload);
         }
 
-        internal void OnUIReload(PanelRenderer renderer, VisualElement rootElement)
+        internal void OnUIReload(PanelRenderer renderer, VisualElement rootElement, int version)
         {
             // Called on initial load AND on any asset change
             if (rootElement == null || rootElement.childCount == 0)
                 return;
+
+            if (version == m_UIVersion)
+                return;
+
+            m_UIVersion = version;
 
             m_PanelRootElement = rootElement;
             m_RootVisualElement = rootElement[0];
@@ -127,7 +134,9 @@ namespace UnityEngine.Rendering
             else
                 selectedPanelName = m_SelectedPanel.displayName;
 
-            SetSelectedPanel(selectedPanelName);
+            // Defer until after layout so all AttachToPanelEvent callbacks from ScheduleTracked
+            // have fired and registered their schedulers before SetHierarchyEnabled is called.
+            m_TabViewElement.schedule.Execute(_ => SetSelectedPanel(selectedPanelName)).StartingIn(100);
         }
 
         void OnDestroy()

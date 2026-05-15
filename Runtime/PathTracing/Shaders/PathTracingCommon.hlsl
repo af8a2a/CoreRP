@@ -3,10 +3,11 @@
 
 #pragma warning(error: 3206) // Implicit truncation of vector type
 
-#include "Packages/com.unity.render-pipelines.core/Runtime/Sampling/Common.hlsl"
 #include "Packages/com.unity.render-pipelines.core/Runtime/UnifiedRayTracing/Common.hlsl"
 #include "Packages/com.unity.render-pipelines.core/Runtime/UnifiedRayTracing/CommonStructs.hlsl"
 #include "Packages/com.unity.render-pipelines.core/Runtime/UnifiedRayTracing/FetchGeometry.hlsl"
+// Include this last so PI doesn't get redefined if it was already defined
+#include "Packages/com.unity.render-pipelines.core/Runtime/Sampling/Common.hlsl"
 
 // Force uniform sampling of the skybox for debugging / ground truth generation
 //#define UNIFORM_ENVSAMPLING
@@ -25,7 +26,7 @@
 #define PYRAMID_LIGHT 5
 #define BOX_LIGHT 6
 #define EMISSIVE_MESH 8 // Must match the variable in UnityEngine.PathTracing.Core.World
-#define ENVIRONMENT_LIGHT 9 // Must match the variable in UnityEngine.PathTracing.Core.World
+#define ENVIRONMENT_LIGHT 9
 
 #define LIGHT_PICKING_METHOD_UNIFORM 0
 #define LIGHT_PICKING_METHOD_RESERVOIR_GRID 1

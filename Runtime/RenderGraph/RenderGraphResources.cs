@@ -38,6 +38,14 @@ namespace UnityEngine.Rendering.RenderGraphModule
 
         static uint s_CurrentValidBit = 1;
 
+#if UNITY_EDITOR
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterAssembliesLoaded)]
+        static void ResetStaticsOnLoad()
+        {
+            s_CurrentValidBit = 1;
+        }
+#endif
+
         public int index
         {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -98,7 +106,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
             return false;
         }
 
-        static public void NewFrame(int executionIndex)
+        public static void NewFrame(int executionIndex)
         {
             uint previousValidBit = s_CurrentValidBit;
 
@@ -208,10 +216,10 @@ namespace UnityEngine.Rendering.RenderGraphModule
             return requestFallBack && writeCount == 0;
         }
 
-        public virtual void CreatePooledGraphicsResource(bool forceResourceCreation) { }
+        public virtual void CreatePooledGraphicsResource(int frameIndex, int executionCount) { }
         public virtual void CreateGraphicsResource() { }
         public virtual void UpdateGraphicsResource() { }
-        public virtual void ReleasePooledGraphicsResource(int frameIndex) { }
+        public virtual void ReleasePooledGraphicsResource(int frameIndex, int executionCount) { }
         public virtual void ReleaseGraphicsResource() { }
         public virtual int GetSortIndex() { return 0; }
         public virtual int GetDescHashCode() { return 0; }
@@ -254,7 +262,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
             graphicsResource = null;
         }
 
-        public override void CreatePooledGraphicsResource(bool forceResourceCreation)
+        public override void CreatePooledGraphicsResource(int frameIndex, int executionCount)
         {
             Debug.Assert(m_Pool != null, "RenderGraphResource: CreatePooledGraphicsResource should only be called for regular pooled resources");
 
@@ -265,7 +273,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
 
             // If the pool doesn't have any available resource that we can use, we will create one
             // In any case, we will update the graphicsResource name based on the RenderGraph resource name
-            if (forceResourceCreation || !m_Pool.TryGetResource(hashCode, out graphicsResource))
+            if (!m_Pool.TryGetResource(hashCode, out graphicsResource, frameIndex, executionCount))
             {
                 CreateGraphicsResource();
             }
@@ -278,7 +286,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
             m_Pool.RegisterFrameAllocation(cachedHash, graphicsResource);
         }
 
-        public override void ReleasePooledGraphicsResource(int frameIndex)
+        public override void ReleasePooledGraphicsResource(int frameIndex, int executionCount)
         {
             if (graphicsResource == null)
                 throw new InvalidOperationException($"RenderGraphResource: Tried to release a resource ({GetName()}) that was never created. Check that there is at least one pass writing to it first.");
@@ -286,7 +294,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
             // Shared resources don't use the pool
             if (m_Pool != null)
             {
-                m_Pool.ReleaseResource(cachedHash, graphicsResource, frameIndex);
+                m_Pool.ReleaseResource(cachedHash, graphicsResource, frameIndex, executionCount);
                 m_Pool.UnregisterFrameAllocation(cachedHash, graphicsResource);
             }
 
