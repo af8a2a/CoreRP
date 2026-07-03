@@ -6,6 +6,8 @@
   "dependencies": {
     "com.unity.burst": "1.8.14",
     "com.unity.collections": "2.4.3",
-    "com.unity.modules.jsonserialize": "1.0.0"
-  }
+    "com.unity.modules.jsonserialize": "1.0.0",
+    "com.unity.profiling.core": "1.0.3"
+  },
+  "_fingerprint": "c3479009a7c4a3b8f04015703a61dc0209d7b8b8"
 }

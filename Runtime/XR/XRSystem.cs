@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Unity.Scripting.LifecycleManagement;
 using UnityEngine.Rendering;
 
 #if ENABLE_VR && ENABLE_XR_MODULE
@@ -8,30 +9,91 @@ using UnityEngine.XR;
 
 namespace UnityEngine.Experimental.Rendering
 {
+    
+    /// <summary>
+    /// Identifies the XR rendering layout for the current frame.
+    /// The layout is inferred from the XR display subsystem configuration
+    /// (number of render passes and views per pass) and determines how
+    /// the render pipeline structures its XR rendering passes.
+    /// </summary>
+    public enum XRLayoutType
+    {
+        /// <summary>
+        /// The layout type could not be determined. This value is used as
+        /// the default before inference runs and indicates an unsupported
+        /// or unrecognized XR display configuration.
+        /// </summary>
+        Unknown,
+
+        /// <summary>
+        /// Single-pass instanced stereo rendering. One render pass with two
+        /// views (left and right eye) rendered simultaneously via instancing.
+        /// </summary>
+        SinglePassStereo,
+
+        /// <summary>
+        /// Multi-pass stereo rendering. Two render passes, each with one
+        /// view (one eye per pass).
+        /// </summary>
+        TwoPassStereo,
+
+        /// <summary>
+        /// Two-pass quad views rendering. Two render passes, each with two
+        /// views. The first pass renders peripheral (outer) views and the
+        /// second pass renders foveal (inner) views.
+        /// </summary>
+        TwoPassQuadViews,
+    }
+
     /// <summary>
     /// Used by render pipelines to control the active XR shader variant.
     /// </summary>
-    public static class SinglepassKeywords
+    public static partial class SinglepassKeywords
     {
         /// <summary> XR shader keyword used by multiview rendering </summary>
+        [AutoStaticsCleanup]
         public static GlobalKeyword STEREO_MULTIVIEW_ON;
         /// <summary> XR shader keywordused by single pass instanced rendering </summary>
+        [AutoStaticsCleanup]
         public static GlobalKeyword STEREO_INSTANCING_ON;
     }
 
     /// <summary>
     /// Used by render pipelines to communicate with XR SDK.
     /// </summary>
-    public static class XRSystem
+    public static partial class XRSystem
     {
-        // Keep track of only one XR layout
+        [OnCodeInitializing]
+        static void ResetStaticsOnLoad()
+        {
+            // Drain any remaining layouts to return pooled XRPass/XRLayout resources
+            while (s_Layout != null && s_Layout.hasLayout)
+                s_Layout.Release();
+            s_Layout = new XRLayoutStack();
+
+            // Dispose materials before nulling — requires custom disposal logic
+            CoreUtils.Destroy(s_OcclusionMeshMaterial);
+            s_OcclusionMeshMaterial = null;
+            CoreUtils.Destroy(s_MirrorViewMaterial);
+            s_MirrorViewMaterial = null;
+
+#if ENABLE_VR && ENABLE_XR_MODULE
+            s_OcclusionMeshScaling = 1.0f;
+#endif
+        }
+
+        // Keep track of only one XR layout — manually drained in ResetStaticsOnLoad()
+        [NoAutoStaticsCleanup]
         static XRLayoutStack s_Layout = new ();
 
         // Delegate allocations of XRPass to the render pipeline
+        [AutoStaticsCleanup]
         static Func<XRPassCreateInfo, XRPass> s_PassAllocator = null;
 
 #if ENABLE_VR && ENABLE_XR_MODULE
+        [AutoStaticsCleanup]
         static List<XRDisplaySubsystem> s_DisplayList = new List<XRDisplaySubsystem>();
+        [AutoStaticsCleanup]
         static XRDisplaySubsystem s_Display;
 
         /// <summary>
@@ -44,21 +106,27 @@ namespace UnityEngine.Experimental.Rendering
 #endif
 
         // MSAA level (number of samples per pixel) shared by all XR displays
+        [AutoStaticsCleanup]
         static MSAASamples s_MSAASamples = MSAASamples.None;
 
 #if ENABLE_VR && ENABLE_XR_MODULE
-        // Occlusion Mesh scaling factor
+        // Occlusion Mesh scaling factor — manually reset; captured into XRPassCreateInfo
+        [NoAutoStaticsCleanup]
         static float s_OcclusionMeshScaling = 1.0f;
 
         // Return true if wants to enable visibility mesh passes
+        [AutoStaticsCleanup]
         static bool s_UseVisibilityMesh = true;
 #endif
 
-        // Internal resources used by XR rendering
+        // Internal resources used by XR rendering — manually cleaned up via CoreUtils.Destroy()
+        [NoAutoStaticsCleanup]
         static Material s_OcclusionMeshMaterial;
+        [NoAutoStaticsCleanup]
         static Material s_MirrorViewMaterial;
 
         // Ability to override the default XR layout
+        [AutoStaticsCleanup]
         static Action<XRLayout, Camera> s_LayoutOverride = null;
 
         /// <summary>
@@ -88,21 +156,25 @@ namespace UnityEngine.Experimental.Rendering
         /// <summary>
         /// Valid empty pass when a camera is not using XR.
         /// </summary>
+        [NoAutoStaticsCleanup]
         public static readonly XRPass emptyPass = new XRPass();
 
         /// <summary>
         /// If true, the system will try to create a layout compatible with single-pass rendering.
         /// </summary>
+        [AutoStaticsCleanup]
         static public bool singlePassAllowed { get; set; } = true;
 
         /// <summary>
         /// Cached value of SystemInfo.foveatedRenderingCaps.
         /// </summary>
+        [AutoStaticsCleanup]
         static public FoveatedRenderingCaps foveatedRenderingCaps { get; set; }
 
         /// <summary>
         /// If true, the system will log some information about the layout to the console.
         /// </summary>
+        [AutoStaticsCleanup]
         static public bool dumpDebugInfo { get; set; } = false;
 
         /// <summary>
@@ -430,6 +502,45 @@ namespace UnityEngine.Experimental.Rendering
             if (s_Display == null)
                 throw new NullReferenceException(nameof(s_Display));
 
+            // early return when there's no render pass.
+            if (s_Display.GetRenderPassCount() == 0)
+                return;
+            
+            // infer XRLayout from number of render passes and number of views in each pass
+            XRLayoutType layoutType = XRLayoutType.Unknown;
+            switch (s_Display.GetRenderPassCount())
+            {
+                case 1:
+                    s_Display.GetRenderPass(0, out var renderPass);
+                    if (renderPass.GetRenderParameterCount() == 2)
+                    {
+                        // If the runtime can use single-pass instancing, keep SinglePassStereo.
+                        // Otherwise the loop below will split the two views into separate passes,
+                        // so the effective layout is TwoPassStereo.
+                        layoutType = CanUseSinglePass(camera, renderPass)
+                            ? XRLayoutType.SinglePassStereo
+                            : XRLayoutType.TwoPassStereo;
+                    }
+                    break;
+                case 2:
+                    s_Display.GetRenderPass(0, out var renderPass0);
+                    s_Display.GetRenderPass(1, out var renderPass1);
+
+                    // Two passes, each with one view, is TwoPassStereo
+                    if (renderPass0.GetRenderParameterCount() == 1 && renderPass1.GetRenderParameterCount() == 1)
+                        layoutType = XRLayoutType.TwoPassStereo;
+                    // Two passes, each with two views, is TwoPassQuadViews — but only
+                    // if single-pass instancing is supported. Without it the loop would
+                    // split each 2-view pass into separate passes, producing 4 total
+                    // passes which is not a supported layout.
+                    else if (renderPass0.GetRenderParameterCount() == 2 && renderPass1.GetRenderParameterCount() == 2
+                        && CanUseSinglePass(camera, renderPass0) && CanUseSinglePass(camera, renderPass1))
+                        layoutType = XRLayoutType.TwoPassQuadViews;
+                    break;
+            }
+            if (layoutType == XRLayoutType.Unknown)
+                throw new NotImplementedException($"Unsupported XR layout: {s_Display.GetRenderPassCount()} render passes");
+
             void AddViewToPass(XRPass xrPass, XRDisplaySubsystem.XRRenderPass renderPass, int renderParamIndex)
             {
                 renderPass.GetRenderParameter(camera, renderParamIndex, out var renderParam);
@@ -461,35 +572,35 @@ namespace UnityEngine.Experimental.Rendering
             // This avoids List allocations that would cause GC pressure every frame
             Vector4 pass0View0Bounds = default, pass0View1Bounds = default;
             Vector4 pass1View0Bounds = default, pass1View1Bounds = default;
-            bool isQuadViewSetup = renderPassCount == 2;
-            if (isQuadViewSetup)
+            if (layoutType == XRLayoutType.TwoPassQuadViews)
             {
                 s_Display.GetRenderPass(0, out var pass0);
                 s_Display.GetRenderPass(1, out var pass1);
-                if (pass0.GetRenderParameterCount() >= 2 && pass1.GetRenderParameterCount() >= 2)
-                {
-                    pass0View0Bounds = ExtractViewBounds(pass0, 0);
-                    pass0View1Bounds = ExtractViewBounds(pass0, 1);
-                    pass1View0Bounds = ExtractViewBounds(pass1, 0);
-                    pass1View1Bounds = ExtractViewBounds(pass1, 1);
-                }
-                else
-                {
-                    isQuadViewSetup = false;
-                }
+                pass0View0Bounds = ExtractViewBounds(pass0, 0);
+                pass0View1Bounds = ExtractViewBounds(pass0, 1);
+                pass1View0Bounds = ExtractViewBounds(pass1, 0);
+                pass1View1Bounds = ExtractViewBounds(pass1, 1);
             }
 
             for (int renderPassIndex = 0; renderPassIndex < renderPassCount; ++renderPassIndex)
             {
                 s_Display.GetRenderPass(renderPassIndex, out var renderPass);
-                s_Display.GetCullingParameters(camera, renderPass.cullingPassIndex, out var cullingParams);
 
                 int renderParameterCount = renderPass.GetRenderParameterCount();
+                s_Display.GetCullingParameters(camera, renderPass.cullingPassIndex, out var cullingParams);
+
                 bool isLastPass = renderPassIndex == renderPassCount - 1;
                 // This parameter makes sure we are in 2 pass quad view's second pass, which is the only case we need to apply special UV scale and offset.
-                bool isQuadViewLastPass = isLastPass && isQuadViewSetup;
+                bool isQuadViewLastPass = isLastPass && layoutType == XRLayoutType.TwoPassQuadViews;
+                bool isQuadViewFirstPass = renderPassIndex == 0 && layoutType == XRLayoutType.TwoPassQuadViews;
                 Vector4 uvScales = Vector4.one;
                 Vector4 uvOffsets = Vector4.zero;
+                if (isQuadViewFirstPass)
+                {
+                    s_Display.GetRenderPass(renderPassIndex + 1, out var innerRenderPass);
+                    SetSplitCullingPlanes(camera, innerRenderPass.cullingPassIndex, ref cullingParams);
+                }
+
                 if (isQuadViewLastPass)
                 {
                     // Calculate UV scales and offsets from pre-computed view bounds
@@ -502,11 +613,12 @@ namespace UnityEngine.Experimental.Rendering
                     uvOffsets.y = -(pass1View0Bounds.w - pass0View0Bounds.w) / pass0View0Bounds.y;
                     uvOffsets.z = (pass1View1Bounds.z - pass0View1Bounds.z) / pass0View1Bounds.x;
                     uvOffsets.w = -(pass1View1Bounds.w - pass0View1Bounds.w) / pass0View1Bounds.y;
+
                 }
 
                 if (CanUseSinglePass(camera, renderPass))
                 {
-                    var createInfo = BuildPass(renderPass, cullingParams, layout, renderPassIndex == s_Display.GetRenderPassCount() - 1, uvScales, uvOffsets);
+                    var createInfo = BuildPass(renderPass, cullingParams, layout, layoutType, uvScales, uvOffsets);
                     var xrPass = s_PassAllocator(createInfo);
 
                     for (int renderParamIndex = 0; renderParamIndex < renderParameterCount; ++renderParamIndex)
@@ -520,7 +632,7 @@ namespace UnityEngine.Experimental.Rendering
                 {
                     for (int renderParamIndex = 0; renderParamIndex < renderParameterCount; ++renderParamIndex)
                     {
-                        var createInfo = BuildPass(renderPass, cullingParams, layout, renderPassIndex == s_Display.GetRenderPassCount() - 1, uvScales, uvOffsets);
+                        var createInfo = BuildPass(renderPass, cullingParams, layout, layoutType, uvScales, uvOffsets);
                         var xrPass = s_PassAllocator(createInfo);
                         AddViewToPass(xrPass, renderPass, renderParamIndex);
                         layout.AddPass(camera, xrPass);
@@ -542,6 +654,15 @@ namespace UnityEngine.Experimental.Rendering
                 Debug.Assert(xrPass.singlePassEnabled || renderPass.GetRenderParameterCount() == 1);
 
                 s_Display.GetCullingParameters(camera, renderPass.cullingPassIndex, out var cullingParams);
+
+                // For the outer QuadView pass, re-derive split planes from the inner pass every frame.
+                // This must happen after BeginCameraRendering, which may have moved the camera.
+                if (xrPass.xrLayoutType == XRLayoutType.TwoPassQuadViews && !xrPass.isQuadViewInnerPass)
+                {
+                    s_Display.GetRenderPass(xrPass.multipassId + 1, out var innerRenderPass);
+                    SetSplitCullingPlanes(camera, innerRenderPass.cullingPassIndex, ref cullingParams);
+                }
+
                 xrPass.AssignCullingParams(renderPass.cullingPassIndex, cullingParams);
 
                 for (int renderParamIndex = 0; renderParamIndex < renderPass.GetRenderParameterCount(); ++renderParamIndex)
@@ -556,6 +677,15 @@ namespace UnityEngine.Experimental.Rendering
         }
 
 #if ENABLE_VR && ENABLE_XR_MODULE
+        static void SetSplitCullingPlanes(Camera camera, int innerCullingPassIndex, ref ScriptableCullingParameters cullingParams)
+        {
+            Debug.Assert(s_Display != null);
+            s_Display.GetCullingParameters(camera, innerCullingPassIndex, out var innerParams);
+            cullingParams.splitPlaneCount = innerParams.cullingPlaneCount;
+            for (int i = 0; i < innerParams.cullingPlaneCount; ++i)
+                cullingParams.SetSplitCullingPlane(i, innerParams.GetCullingPlane(i));
+        }
+
         static bool CanUseSinglePass(Camera camera, XRDisplaySubsystem.XRRenderPass renderPass)
         {
             if (!singlePassAllowed)
@@ -609,7 +739,7 @@ namespace UnityEngine.Experimental.Rendering
             return rtDesc;
         }
 
-        static XRPassCreateInfo BuildPass(XRDisplaySubsystem.XRRenderPass xrRenderPass, ScriptableCullingParameters cullingParameters, XRLayout layout, bool isLastPass, Vector4 uvScales, Vector4 uvOffsets)
+        static XRPassCreateInfo BuildPass(XRDisplaySubsystem.XRRenderPass xrRenderPass, ScriptableCullingParameters cullingParameters, XRLayout layout, XRLayoutType layoutType, Vector4 uvScales, Vector4 uvOffsets)
         {
             XRPassCreateInfo passInfo = new XRPassCreateInfo
             {
@@ -629,7 +759,7 @@ namespace UnityEngine.Experimental.Rendering
                 copyDepth               = xrRenderPass.shouldFillOutDepth,
                 spaceWarpRightHandedNDC = xrRenderPass.spaceWarpRightHandedNDC,
                 xrSdkRenderPass         = xrRenderPass,
-                isLastCameraPass        = isLastPass,
+                xrLayoutType            = layoutType,
                 uvScales                 = uvScales,
                 uvOffsets                = uvOffsets
             };

@@ -12,7 +12,6 @@ namespace UnityEngine.Rendering.RenderGraphModule
         RTHandle m_BlackTexture2D;
         RTHandle m_WhiteTexture2D;
         RTHandle m_ShadowTexture2D;
-        RTHandle m_ShadowTextureArray2D;
 
         /// <summary>Default black 2D texture.</summary>
         public TextureHandle blackTexture { get; private set; }
@@ -34,8 +33,6 @@ namespace UnityEngine.Rendering.RenderGraphModule
         public TextureHandle whiteTextureXR { get; private set; }
         /// <summary>Default 1x1 shadow texture.</summary>
         public TextureHandle defaultShadowTexture { get; private set; }
-        /// <summary>Default 1x1 shadow texture array.</summary>
-        public TextureHandle defaultShadowArrayTexture { get; private set; }
 
         internal RenderGraphDefaultResources()
         {
@@ -61,10 +58,6 @@ namespace UnityEngine.Rendering.RenderGraphModule
                 Graphics.ExecuteCommandBuffer(cmd);
                 CommandBufferPool.Release(cmd);
             }
-
-            if (m_ShadowTextureArray2D == null)
-                m_ShadowTextureArray2D = RTHandles.Alloc(1, 1, dimension: TextureDimension.Tex2DArray, depthBufferBits: DepthBits.Depth32, isShadowMap: true,
-                    name: "DefaultShadowArrayTexture");
         }
 
         internal void Cleanup()
@@ -77,9 +70,6 @@ namespace UnityEngine.Rendering.RenderGraphModule
 
             m_ShadowTexture2D?.Release();
             m_ShadowTexture2D = null;
-
-            m_ShadowTextureArray2D?.Release();
-            m_ShadowTextureArray2D = null;
         }
 
         internal void InitializeForRendering(RenderGraph renderGraph)
@@ -89,7 +79,6 @@ namespace UnityEngine.Rendering.RenderGraphModule
             blackTexture = renderGraph.ImportTexture(m_BlackTexture2D, true);
             whiteTexture = renderGraph.ImportTexture(m_WhiteTexture2D, true);
             defaultShadowTexture = renderGraph.ImportTexture(m_ShadowTexture2D, true);
-            defaultShadowArrayTexture = renderGraph.ImportTexture(m_ShadowTextureArray2D, true);
 
             if (!TextureXR.initialized)
                 return;

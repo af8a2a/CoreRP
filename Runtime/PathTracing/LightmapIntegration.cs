@@ -43,6 +43,7 @@ namespace UnityEngine.PathTracing.Integration
         public static readonly int ShaderLocalToWorld = Shader.PropertyToID("g_ShaderLocalToWorld");
         public static readonly int ShaderLocalToWorldNormals = Shader.PropertyToID("g_ShaderLocalToWorldNormals");
         public static readonly int InstanceGeometryIndex = Shader.PropertyToID("g_InstanceGeometryIndex");
+        public static readonly int TerrainIndex = Shader.PropertyToID("g_TerrainIndex");
         public static readonly int GISampleCount = Shader.PropertyToID("g_GISampleCount");
         public static readonly int AOMaxDistance = Shader.PropertyToID("g_AOMaxDistance");
         public static readonly int InputSampleCountInW = Shader.PropertyToID("g_InputSampleCountInW");
@@ -145,6 +146,12 @@ namespace UnityEngine.PathTracing.Integration
             Util.SetEmissiveSamplingKeyword(cmd, _directionalAndEnvironmentShader, emissiveSamplingMode);
         }
 
+        public void SetTerrainKeyword(CommandBuffer cmd, bool hasTerrains)
+        {
+            Util.SetTerrainRayMarchingKeyword(cmd, _stochasticLightShader, hasTerrains);
+            Util.SetTerrainRayMarchingKeyword(cmd, _directionalAndEnvironmentShader, hasTerrains);
+        }
+
         public void Prepare(IRayTracingShader stochasticLightShader, IRayTracingShader directionalAndEnvironmentShader, ComputeShader normalizationShader, ComputeShader expansionHelpers, SamplingResources samplingResources, RTHandle emptyExposureTexture)
         {
             _stochasticLightShader = stochasticLightShader;
@@ -173,6 +180,7 @@ namespace UnityEngine.PathTracing.Integration
             Matrix4x4 shaderLocalToWorld,
             Matrix4x4 shaderLocalToWorldNormals,
             int instanceGeometryIndex,
+            int terrainIndex,
             Vector2Int instanceTexelSize,
             uint2 chunkOffset,
             World world,
@@ -219,6 +227,7 @@ namespace UnityEngine.PathTracing.Integration
             _stochasticLightShader.SetMatrixParam(cmd, LightmapIntegratorShaderIDs.ShaderLocalToWorld, shaderLocalToWorld);
             _stochasticLightShader.SetMatrixParam(cmd, LightmapIntegratorShaderIDs.ShaderLocalToWorldNormals, shaderLocalToWorldNormals);
             _stochasticLightShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.InstanceGeometryIndex, instanceGeometryIndex);
+            _stochasticLightShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.TerrainIndex, terrainIndex);
             _stochasticLightShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.ReceiveShadows, receiveShadows ? 1 : 0);
             _stochasticLightShader.SetFloatParam(cmd, LightmapIntegratorShaderIDs.PushOff, pushOff);
             _stochasticLightShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.InstanceWidth, instanceWidth);
@@ -236,6 +245,7 @@ namespace UnityEngine.PathTracing.Integration
             _directionalAndEnvironmentShader.SetMatrixParam(cmd, LightmapIntegratorShaderIDs.ShaderLocalToWorld, shaderLocalToWorld);
             _directionalAndEnvironmentShader.SetMatrixParam(cmd, LightmapIntegratorShaderIDs.ShaderLocalToWorldNormals, shaderLocalToWorldNormals);
             _directionalAndEnvironmentShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.InstanceGeometryIndex, instanceGeometryIndex);
+            _directionalAndEnvironmentShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.TerrainIndex, terrainIndex);
             _directionalAndEnvironmentShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.ReceiveShadows, receiveShadows ? 1 : 0);
             _directionalAndEnvironmentShader.SetFloatParam(cmd, LightmapIntegratorShaderIDs.PushOff, pushOff);
             _directionalAndEnvironmentShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.InstanceWidth, instanceWidth);
@@ -322,6 +332,11 @@ namespace UnityEngine.PathTracing.Integration
             Util.SetEmissiveSamplingKeyword(cmd, _accumulationShader, emissiveSamplingMode);
         }
 
+        public void SetTerrainKeyword(CommandBuffer cmd, bool hasTerrains)
+        {
+            Util.SetTerrainRayMarchingKeyword(cmd, _accumulationShader, hasTerrains);
+        }
+
         public void Prepare(IRayTracingShader accumulationShader, ComputeShader normalizationShader, ComputeShader expansionHelpers, SamplingResources samplingResources, RTHandle emptyExposureTexture)
         {
             _accumulationShader = accumulationShader;
@@ -346,6 +361,7 @@ namespace UnityEngine.PathTracing.Integration
             Matrix4x4 shaderLocalToWorld,
             Matrix4x4 shaderLocalToWorldNormals,
             int instanceGeometryIndex,
+            int terrainIndex,
             Vector2Int instanceTexelSize,
             uint2 chunkOffset,
             World world,
@@ -387,6 +403,7 @@ namespace UnityEngine.PathTracing.Integration
             _accumulationShader.SetMatrixParam(cmd, LightmapIntegratorShaderIDs.ShaderLocalToWorld, shaderLocalToWorld);
             _accumulationShader.SetMatrixParam(cmd, LightmapIntegratorShaderIDs.ShaderLocalToWorldNormals, shaderLocalToWorldNormals);
             _accumulationShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.InstanceGeometryIndex, instanceGeometryIndex);
+            _accumulationShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.TerrainIndex, terrainIndex);
             _accumulationShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.ReceiveShadows, receiveShadows ? 1 : 0);
             _accumulationShader.SetFloatParam(cmd, LightmapIntegratorShaderIDs.PushOff, pushOff);
             _accumulationShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.InstanceWidth, instanceWidth);
@@ -453,6 +470,11 @@ namespace UnityEngine.PathTracing.Integration
             Util.SetEmissiveSamplingKeyword(cmd, _accumulationShader, emissiveSamplingMode);
         }
 
+        public void SetTerrainKeyword(CommandBuffer cmd, bool hasTerrains)
+        {
+            Util.SetTerrainRayMarchingKeyword(cmd, _accumulationShader, hasTerrains);
+        }
+
         public void Prepare(IRayTracingShader accumulationShader, ComputeShader normalizationShader, ComputeShader expansionHelpers, SamplingResources samplingResources, RTHandle emptyExposureTexture)
         {
             _accumulationShader = accumulationShader;
@@ -479,6 +501,7 @@ namespace UnityEngine.PathTracing.Integration
             Matrix4x4 shaderLocalToWorld,
             Matrix4x4 shaderLocalToWorldNormals,
             int instanceGeometryIndex,
+            int terrainIndex,
             Vector2Int instanceTexelSize,
             uint2 chunkOffset,
             World world,
@@ -518,6 +541,7 @@ namespace UnityEngine.PathTracing.Integration
             _accumulationShader.SetMatrixParam(cmd, LightmapIntegratorShaderIDs.ShaderLocalToWorld, shaderLocalToWorld);
             _accumulationShader.SetMatrixParam(cmd, LightmapIntegratorShaderIDs.ShaderLocalToWorldNormals, shaderLocalToWorldNormals);
             _accumulationShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.InstanceGeometryIndex, instanceGeometryIndex);
+            _accumulationShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.TerrainIndex, terrainIndex);
             _accumulationShader.SetFloatParam(cmd, LightmapIntegratorShaderIDs.PushOff, pushOff);
             _accumulationShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.InstanceWidth, instanceWidth);
 
@@ -585,6 +609,11 @@ namespace UnityEngine.PathTracing.Integration
             _accumulationDispatchBuffer?.Dispose();
         }
 
+        public void SetTerrainKeyword(CommandBuffer cmd, bool hasTerrains)
+        {
+            Util.SetTerrainRayMarchingKeyword(cmd, _accumulationShader, hasTerrains);
+        }
+
         public void Prepare(IRayTracingShader accumulationShader, ComputeShader normalizationShader, ComputeShader expansionHelpers, SamplingResources samplingResources, RTHandle emptyExposureTexture)
         {
             _accumulationShader = accumulationShader;
@@ -609,6 +638,7 @@ namespace UnityEngine.PathTracing.Integration
             Matrix4x4 shaderLocalToWorld,
             Matrix4x4 shaderLocalToWorldNormals,
             int instanceGeometryIndex,
+            int terrainIndex,
             Vector2Int instanceTexelSize,
             uint2 chunkOffset,
             World world,
@@ -647,6 +677,7 @@ namespace UnityEngine.PathTracing.Integration
             _accumulationShader.SetMatrixParam(cmd, LightmapIntegratorShaderIDs.ShaderLocalToWorld, shaderLocalToWorld);
             _accumulationShader.SetMatrixParam(cmd, LightmapIntegratorShaderIDs.ShaderLocalToWorldNormals, shaderLocalToWorldNormals);
             _accumulationShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.InstanceGeometryIndex, instanceGeometryIndex);
+            _accumulationShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.TerrainIndex, terrainIndex);
             _accumulationShader.SetFloatParam(cmd, LightmapIntegratorShaderIDs.PushOff, pushOff);
             _accumulationShader.SetFloatParam(cmd, LightmapIntegratorShaderIDs.AOMaxDistance, aoMaxDistance);
             _accumulationShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.InstanceWidth, instanceWidth);
@@ -700,6 +731,11 @@ namespace UnityEngine.PathTracing.Integration
             _accumulationDispatchBuffer?.Dispose();
         }
 
+        public void SetTerrainKeyword(CommandBuffer cmd, bool hasTerrains)
+        {
+            Util.SetTerrainRayMarchingKeyword(cmd, _accumulationShader, hasTerrains);
+        }
+
         public void Prepare(IRayTracingShader accumulationShader, ComputeShader normalizationShader, ComputeShader expansionHelpers, SamplingResources samplingResources, RTHandle emptyExposureTexture)
         {
             _accumulationShader = accumulationShader;
@@ -724,6 +760,7 @@ namespace UnityEngine.PathTracing.Integration
             Matrix4x4 shaderLocalToWorld,
             Matrix4x4 shaderLocalToWorldNormals,
             int instanceGeometryIndex,
+            int terrainIndex,
             Vector2Int instanceTexelSize,
             uint2 chunkOffset,
             World world,
@@ -761,6 +798,7 @@ namespace UnityEngine.PathTracing.Integration
             _accumulationShader.SetMatrixParam(cmd, LightmapIntegratorShaderIDs.ShaderLocalToWorld, shaderLocalToWorld);
             _accumulationShader.SetMatrixParam(cmd, LightmapIntegratorShaderIDs.ShaderLocalToWorldNormals, shaderLocalToWorldNormals);
             _accumulationShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.InstanceGeometryIndex, instanceGeometryIndex);
+            _accumulationShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.TerrainIndex, terrainIndex);
             _accumulationShader.SetFloatParam(cmd, LightmapIntegratorShaderIDs.PushOff, pushOff);
             _accumulationShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.InstanceWidth, instanceWidth);
 
@@ -813,6 +851,11 @@ namespace UnityEngine.PathTracing.Integration
             _accumulationDispatchBuffer?.Dispose();
         }
 
+        public void SetTerrainKeyword(CommandBuffer cmd, bool hasTerrains)
+        {
+            Util.SetTerrainRayMarchingKeyword(cmd, _accumulationShader, hasTerrains);
+        }
+
         public void Prepare(IRayTracingShader accumulationShader, ComputeShader normalizationShader, ComputeShader expansionHelpers, SamplingResources samplingResources, RTHandle emptyExposureTexture)
         {
             _accumulationShader = accumulationShader;
@@ -837,6 +880,7 @@ namespace UnityEngine.PathTracing.Integration
             Matrix4x4 shaderLocalToWorld,
             Matrix4x4 shaderLocalToWorldNormals,
             int instanceGeometryIndex,
+            int terrainIndex,
             Vector2Int instanceTexelSize,
             uint2 chunkOffset,
             World world,
@@ -875,6 +919,7 @@ namespace UnityEngine.PathTracing.Integration
             _accumulationShader.SetMatrixParam(cmd, LightmapIntegratorShaderIDs.ShaderLocalToWorld, shaderLocalToWorld);
             _accumulationShader.SetMatrixParam(cmd, LightmapIntegratorShaderIDs.ShaderLocalToWorldNormals, shaderLocalToWorldNormals);
             _accumulationShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.InstanceGeometryIndex, instanceGeometryIndex);
+            _accumulationShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.TerrainIndex, terrainIndex);
             _accumulationShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.ReceiveShadows, receiveShadows ? 1 : 0);
             _accumulationShader.SetFloatParam(cmd, LightmapIntegratorShaderIDs.PushOff, pushOff);
             _accumulationShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.InstanceWidth, instanceWidth);
@@ -931,6 +976,11 @@ namespace UnityEngine.PathTracing.Integration
         {
         }
 
+        public void SetTerrainKeyword(CommandBuffer cmd, bool hasTerrains)
+        {
+            Util.SetTerrainRayMarchingKeyword(cmd, _accumulationShader, hasTerrains);
+        }
+
         public void Prepare(IRayTracingShader accumulationShader, ComputeShader expansionHelpers)
         {
             _accumulationShader = accumulationShader;
@@ -946,6 +996,7 @@ namespace UnityEngine.PathTracing.Integration
             Matrix4x4 shaderLocalToWorld,
             Matrix4x4 shaderLocalToWorldNormals,
             int instanceGeometryIndex,
+            int terrainIndex,
             World world,
             GraphicsBuffer gBuffer,
             uint expandedSampleWidth,
@@ -960,6 +1011,7 @@ namespace UnityEngine.PathTracing.Integration
             _accumulationShader.SetMatrixParam(cmd, LightmapIntegratorShaderIDs.ShaderLocalToWorld, shaderLocalToWorld);
             _accumulationShader.SetMatrixParam(cmd, LightmapIntegratorShaderIDs.ShaderLocalToWorldNormals, shaderLocalToWorldNormals);
             _accumulationShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.InstanceGeometryIndex, instanceGeometryIndex);
+            _accumulationShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.TerrainIndex, terrainIndex);
             _accumulationShader.SetBufferParam(cmd, LightmapIntegratorShaderIDs.GBuffer, gBuffer);
             _accumulationShader.SetBufferParam(cmd, LightmapIntegratorShaderIDs.LightmapSamplesExpanded, lightmapSamplesExpanded);
 

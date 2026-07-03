@@ -1,4 +1,4 @@
-#if DEVELOPMENT_BUILD || UNITY_EDITOR
+#if UNITY_ENABLE_CHECKS
 #define PROBEREFERENCEVOLUME_DEBUG
 #endif
 
@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEngine.Rendering.RenderGraphModule;
 using UnityEditor;
+using Unity.Scripting.LifecycleManagement;
 
 namespace UnityEngine.Rendering
 {
@@ -237,6 +238,8 @@ namespace UnityEngine.Rendering
 
         Texture m_DisplayNumbersTexture;
 
+        // Owns a GraphicsBuffer released by CleanupDebug() on the pipeline-driven Cleanup path; auto re-creation would orphan that GPU allocation.
+        [NoAutoStaticsCleanup]
         internal static ProbeSamplingDebugData probeSamplingDebugData = new ProbeSamplingDebugData();
 
         Mesh m_DebugOffsetMesh;
@@ -445,6 +448,8 @@ namespace UnityEngine.Rendering
             CoreUtils.Destroy(m_DebugOffsetMaterial);
             CoreUtils.Destroy(m_DebugFragmentationMaterial);
             CoreUtils.SafeRelease(probeSamplingDebugData?.positionNormalBuffer);
+            if (probeSamplingDebugData != null)
+                probeSamplingDebugData.positionNormalBuffer = null;
 
 #if UNITY_EDITOR
             UnityEditor.Lightmapping.lightingDataCleared -= OnClearLightingdata;
@@ -893,7 +898,9 @@ namespace UnityEngine.Rendering
             return !GeometryUtility.TestPlanesAABB(frustumPlanes, volumeAABB);
         }
 
-        static Vector4[] s_BoundsArray = new Vector4[16 * 3];
+        // Scratch buffer: UpdateDebugFromSelection fills count*3 entries and ShouldCullCell reads
+        // back only those, so stale contents are never observed and no per-Play-Mode reset is needed.
+        static readonly Vector4[] s_BoundsArray = new Vector4[16 * 3];
 
         static void UpdateDebugFromSelection(ref Vector4[] _AdjustmentVolumeBounds, ref int _AdjustmentVolumeCount)
         {

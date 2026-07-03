@@ -128,6 +128,8 @@ namespace UnityEngine.PathTracing.Core
             var envTex = world.GetEnvironmentTexture(cmd, out EnvironmentCDF envCDF);
             shader.SetTextureParam(cmd, Shader.PropertyToID("g_EnvTex"), envTex);
             SetEnvSamplingShaderParams(cmd, shader, envCDF);
+
+            world.GetAccelerationStructure().BindTerrainResources(cmd, shader);
         }
 
         static internal void BindPathTracingInputs(
@@ -173,6 +175,11 @@ namespace UnityEngine.PathTracing.Core
             shader.SetKeyword(cmd, shader.CreateLocalKeyword("EMISSIVE_SAMPLING_LIGHT"), lightSamplingMode == EmissiveSamplingMode.LightSampling);
             shader.SetKeyword(cmd, shader.CreateLocalKeyword("EMISSIVE_SAMPLING_BRDF"), lightSamplingMode == EmissiveSamplingMode.BRDFSampling);
             shader.SetKeyword(cmd, shader.CreateLocalKeyword("EMISSIVE_SAMPLING_MIS"), lightSamplingMode == EmissiveSamplingMode.MIS);
+        }
+
+        internal static void SetTerrainRayMarchingKeyword(CommandBuffer cmd, IRayTracingShader shader, bool enableTerrain)
+        {
+            shader.SetKeyword(cmd, shader.CreateLocalKeyword("TERRAIN_RAY_MARCHING_ENABLED"), enableTerrain);
         }
 
         internal static RayTracingResources LoadOrCreateRayTracingResources()

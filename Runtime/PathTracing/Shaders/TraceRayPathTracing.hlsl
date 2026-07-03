@@ -49,11 +49,21 @@ struct PathTracingPayload
         _hit.instanceID = 1;
     }
 };
+
+struct ProceduralIntersectionAttribs
+{
+    bool isFrontFace;
+};
+
 #ifndef UNIFIED_RT_RAYGEN_FUNC
 #define UNIFIED_RT_RAYGEN_FUNC RayGenExecute
 #endif
 #define UNIFIED_RT_ANYHIT_FUNC AnyHitExecute
 #define UNIFIED_RT_CLOSESTHIT_FUNC ClosestHitExecute
+#ifdef TERRAIN_RAY_MARCHING_ENABLED
+#define UNIFIED_RT_INTERSECTION_FUNC IntersectionExecute
+#define UNIFIED_RT_ADDITIONAL_INTERSECTION_ATTRIBS ProceduralIntersectionAttribs
+#endif
 #define UNIFIED_RT_PAYLOAD PathTracingPayload
 #include "Packages/com.unity.render-pipelines.core/Runtime/UnifiedRayTracing/TraceRay.hlsl"
 

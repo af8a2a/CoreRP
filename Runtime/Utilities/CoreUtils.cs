@@ -701,7 +701,7 @@ namespace UnityEngine.Rendering
         /// <param name="depthSlice">Depth slice that should be bound as a render texture if applicable.</param>
         public static void SetRenderTarget(CommandBuffer cmd, RTHandle colorBuffer, RTHandle depthBuffer, int miplevel = 0, CubemapFace cubemapFace = CubemapFace.Unknown, int depthSlice = -1)
         {
-#if DEVELOPMENT_BUILD || UNITY_EDITOR
+#if UNITY_ENABLE_CHECKS
             if (colorBuffer.rt != null && depthBuffer.rt != null)
             {
                 int cw = colorBuffer.rt.width;
@@ -728,7 +728,7 @@ namespace UnityEngine.Rendering
         /// <param name="depthSlice">Depth slice that should be bound as a render texture if applicable.</param>
         public static void SetRenderTarget(CommandBuffer cmd, RTHandle colorBuffer, RTHandle depthBuffer, ClearFlag clearFlag, int miplevel = 0, CubemapFace cubemapFace = CubemapFace.Unknown, int depthSlice = -1)
         {
-#if DEVELOPMENT_BUILD || UNITY_EDITOR
+#if UNITY_ENABLE_CHECKS
             if (colorBuffer.rt != null && depthBuffer.rt != null)
             {
                 int cw = colorBuffer.rt.width;
@@ -756,7 +756,7 @@ namespace UnityEngine.Rendering
         /// <param name="depthSlice">Depth slice that should be bound as a render texture if applicable.</param>
         public static void SetRenderTarget(CommandBuffer cmd, RTHandle colorBuffer, RTHandle depthBuffer, ClearFlag clearFlag, Color clearColor, int miplevel = 0, CubemapFace cubemapFace = CubemapFace.Unknown, int depthSlice = -1)
         {
-#if DEVELOPMENT_BUILD || UNITY_EDITOR
+#if UNITY_ENABLE_CHECKS
             if (colorBuffer.rt != null && depthBuffer.rt != null)
             {
                 int cw = colorBuffer.rt.width;
@@ -810,7 +810,7 @@ namespace UnityEngine.Rendering
             RTHandle depthBuffer, RenderBufferLoadAction depthLoadAction, RenderBufferStoreAction depthStoreAction,
             ClearFlag clearFlag, Color clearColor, int miplevel = 0, CubemapFace cubemapFace = CubemapFace.Unknown, int depthSlice = -1)
         {
-#if DEVELOPMENT_BUILD || UNITY_EDITOR
+#if UNITY_ENABLE_CHECKS
             if (colorBuffer.rt != null && depthBuffer.rt != null)
             {
                 int cw = colorBuffer.rt.width;
@@ -1284,19 +1284,6 @@ namespace UnityEngine.Rendering
                 cmd.m_WrappedCommandBuffer.DisableShaderKeyword(keyword);
         }
 
-        /// <summary>
-        /// Set a keyword using a compute command buffer.
-        /// </summary>
-        /// <param name="cmd">CommandBuffer on which to set the global keyword.</param>
-        /// <param name="cs">Compute Shader on which to set the keyword.</param>
-        /// <param name="keyword">Keyword to be set.</param>
-        /// <param name="state">Value of the keyword to be set.</param>
-        public static void SetKeyword(ComputeCommandBuffer cmd, ComputeShader cs, string keyword, bool state)
-        {
-            _ = cs;
-            SetKeyword((BaseCommandBuffer)cmd, keyword, state);
-        }
-
         // Caution: such a call should not be use interleaved with command buffer command, as it is immediate
         /// <summary>
         /// Set a keyword immediately on a Material.
@@ -1701,7 +1688,7 @@ namespace UnityEngine.Rendering
         [Obsolete("Use DrawRendererList(CommandBuffer cmd, UnityEngine.Rendering.RendererList rendererList) instead. #from(6000.3) (UnityUpgradable) -> !0")]
         public static void DrawRendererList(ScriptableRenderContext renderContext, CommandBuffer cmd, UnityEngine.Rendering.RendererList rendererList)
         {
-#if UNITY_ENABLE_CHECKS || UNITY_EDITOR
+#if UNITY_ENABLE_CHECKS
             if (!rendererList.isValid)
                 throw new ArgumentException("Invalid renderer list provided to DrawRendererList");
 #endif
@@ -1715,7 +1702,7 @@ namespace UnityEngine.Rendering
         /// <param name="rendererList">Renderer List to render.</param>
         public static void DrawRendererList(CommandBuffer cmd, UnityEngine.Rendering.RendererList rendererList)
         {
-#if DEVELOPMENT_BUILD || UNITY_EDITOR
+#if UNITY_ENABLE_CHECKS
             if (!rendererList.isValid)
                 throw new ArgumentException("Invalid renderer list provided to DrawRendererList");
 #endif
@@ -1729,7 +1716,7 @@ namespace UnityEngine.Rendering
         /// <param name="rendererList">Renderer List to render.</param>
         public static void DrawRendererList(IRasterCommandBuffer cmd, UnityEngine.Rendering.RendererList rendererList)
         {
-#if DEVELOPMENT_BUILD || UNITY_EDITOR
+#if UNITY_ENABLE_CHECKS
             if (!rendererList.isValid)
                 throw new ArgumentException("Invalid renderer list provided to DrawRendererList");
 #endif

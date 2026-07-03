@@ -77,23 +77,6 @@ namespace UnityEngine.Rendering.RenderGraphModule
         /// </summary>
         /// <param name="count">Number of elements in the buffer.</param>
         /// <param name="stride">Size of one element in the buffer.</param>
-        /// <param name="name">Buffer name.</param>
-        /// <param name="target">Type of the buffer.</param>
-        public BufferDesc(int count, int stride, string name, GraphicsBuffer.Target target = GraphicsBuffer.Target.Structured)
-            : this()
-        {
-            this.count = count;
-            this.stride = stride;
-            this.target = target;
-            this.name = name;
-            this.usageFlags = GraphicsBuffer.UsageFlags.None;
-        }
-
-        /// <summary>
-        /// BufferDesc constructor.
-        /// </summary>
-        /// <param name="count">Number of elements in the buffer.</param>
-        /// <param name="stride">Size of one element in the buffer.</param>
         /// <param name="target">Type of the buffer.</param>
         public BufferDesc(int count, int stride, GraphicsBuffer.Target target)
             : this()
@@ -137,7 +120,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
         {
             var name = GetName();
             graphicsResource = new GraphicsBuffer(desc.target, desc.usageFlags, desc.count, desc.stride);
-#if DEVELOPMENT_BUILD || UNITY_EDITOR
+#if UNITY_ENABLE_CHECKS
             graphicsResource.name = name == "" ? $"RenderGraphBuffer_{desc.count}_{desc.stride}_{desc.target}" : name;
 #endif
         }

@@ -7,7 +7,7 @@ namespace UnityEditor.Rendering
         /// <summary>
         /// Styles
         /// </summary>
-        public static partial class Styles
+        public static class Styles
         {
             /// <summary>Title with "General"</summary>
             public static readonly GUIContent generalHeader = EditorGUIUtility.TrTextContent("General");
@@ -19,7 +19,6 @@ namespace UnityEditor.Rendering
             public static readonly GUIContent emissionHeader = EditorGUIUtility.TrTextContent("Emission");
             /// <summary>Title with "Shadows"</summary>
             public static readonly GUIContent shadowHeader = EditorGUIUtility.TrTextContent("Shadows");
-            public static readonly GUIContent volumetricHeader = EditorGUIUtility.TrTextContent("Volumetrics");
             /// <summary>Title with "Light Layer"</summary>
             public static readonly GUIContent lightLayer = EditorGUIUtility.TrTextContent("Rendering Layer Mask", "Specifies the Rendering Layers that the Light affects. This Light illuminates Renderers with matching Rendering Layer flags.");
 

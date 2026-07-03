@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Unity.IO.LowLevel.Unsafe;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
+using Unity.Scripting.LifecycleManagement;
 
 namespace UnityEngine.Rendering
 {
@@ -107,6 +108,23 @@ namespace UnityEngine.Rendering
 
             public int _ProbeCountInChunkLine;
             public int _ProbeCountInChunkSlice;
+        }
+
+        internal struct BufferLayoutBuilder
+        {
+            int _Offset;
+
+            public BufferLayoutBuilder(int initialOffset = 0)
+            {
+                _Offset = initialOffset;
+            }
+
+            public int AddBlock(int blockSize)
+            {
+                int currentOffset = _Offset;
+                _Offset += blockSize;
+                return currentOffset;
+            }
         }
 
         internal class CellStreamingScratchBuffer
@@ -839,6 +857,8 @@ namespace UnityEngine.Rendering
                 return 0;
         }
 
+        // Bound once to a static method; the delegate never changes, so there is no per-Play-Mode state to reset.
+        [NoAutoStaticsCleanup]
         static readonly DynamicArray<Cell>.SortComparer s_BlendingComparer = BlendingComparer;
 
         void UpdateBlendingCellStreaming(CommandBuffer cmd)
@@ -964,6 +984,8 @@ namespace UnityEngine.Rendering
             else return 0;
         }
 
+        // Bound once to a static method; the delegate never changes, so there is no per-Play-Mode state to reset.
+        [NoAutoStaticsCleanup]
         static readonly DynamicArray<Cell>.SortComparer s_DefragComparer = DefragComparer;
 
         void StartIndexDefragmentation()
@@ -1457,8 +1479,7 @@ namespace UnityEngine.Rendering
             return diskStreamingEnabled && m_ActiveStreamingRequests.Exists(x => x.cell == cell);
         }
 
-        [Conditional("UNITY_EDITOR")]
-        [Conditional("DEVELOPMENT_BUILD")]
+        [Conditional("UNITY_ENABLE_CHECKS")]
         void LogStreaming(string log)
         {
             Debug.Log(log);

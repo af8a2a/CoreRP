@@ -19,6 +19,7 @@ uint    g_PathTermination;
 UNIFIED_RT_DECLARE_ACCEL_STRUCT(g_SceneAccelStruct);
 
 
+
 #define RENDER_ALL 0
 #define RENDER_ONLY_STATIC 1
 #define RENDER_ALL_IN_CAMERA_RAYS_THEN_ONLY_STATIC 2
@@ -301,6 +302,25 @@ float3 LoadMaterialTransmission(UnifiedRT::InstanceData instanceInfo, float2 uv0
     return saturate(SampleAtlas(g_TransmissionTextures, sampler_g_TransmissionTextures, matInfo.transmissionTextureIndex, uv0, matInfo.transmissionScale, matInfo.transmissionOffset, pointSampleTransmission).rgb);
 }
 
+#ifdef TERRAIN_RAY_MARCHING_ENABLED
+bool IntersectionExecute(UnifiedRT::HitContext hitContext, out float hitT, out float2 uvAttributes, out ProceduralIntersectionAttribs additionalAttribs)
+{
+    bool frontFaceHit = false;
+    float2 hitUv = 0;
+    bool hit = RayMarchTerrainTile(hitContext.InstanceID(), hitContext.PrimitiveIndex(),
+        hitContext.WorldRayOrigin(), hitContext.WorldRayDirection(),
+        hitContext.RayTCurrent(), hitT, frontFaceHit, hitUv);
+
+    if (hit && hitT < hitContext.RayTCurrent() && hitT >= hitContext.RayTMin())
+    {
+        uvAttributes = hitUv;
+        additionalAttribs.isFrontFace = frontFaceHit;
+        return true;
+    }
+    return false;
+}
+#endif
+
 uint AnyHitExecute(UnifiedRT::HitContext hitContext, inout PathTracingPayload payload)
 {
     UnifiedRT::Hit hit;
@@ -332,6 +352,27 @@ uint AnyHitExecute(UnifiedRT::HitContext hitContext, inout PathTracingPayload pa
     }
 }
 
+#ifdef TERRAIN_RAY_MARCHING_ENABLED
+void ClosestHitExecute(UnifiedRT::HitContext hitContext, inout PathTracingPayload payload, ProceduralIntersectionAttribs proceduralHitAttribs)
+{
+    if (payload.IsShadowRay())
+    {
+        payload.MarkHit();
+
+    }
+    else
+    {
+        UnifiedRT::Hit hit = (UnifiedRT::Hit)0;
+        hit.instanceID = hitContext.InstanceID();
+        hit.primitiveIndex = hitContext.PrimitiveIndex();
+        hit.uvBarycentrics = hitContext.UvBarycentrics();
+        hit.isFrontFace = hitContext.PrimitiveType() == UnifiedRT::kCommittedProceduralHit ? proceduralHitAttribs.isFrontFace : hitContext.IsFrontFace();
+        hit.hitDistance = hitContext.RayTCurrent();
+
+        payload.SetHit(hit);
+    }
+}
+#else
 void ClosestHitExecute(UnifiedRT::HitContext hitContext, inout PathTracingPayload payload)
 {
     if (payload.IsShadowRay())
@@ -347,6 +388,8 @@ void ClosestHitExecute(UnifiedRT::HitContext hitContext, inout PathTracingPayloa
         hit.uvBarycentrics = hitContext.UvBarycentrics();
         hit.isFrontFace = hitContext.IsFrontFace();
         hit.hitDistance = hitContext.RayTCurrent();
+
         payload.SetHit(hit);
     }
 }
+#endif

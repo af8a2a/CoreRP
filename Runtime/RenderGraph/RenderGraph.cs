@@ -409,7 +409,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
 
         internal RenderGraphValidationLayer validationLayer
         {
-#if DEVELOPMENT_BUILD || UNITY_EDITOR
+#if UNITY_ENABLE_CHECKS
             set { m_ValidationLayer = value; }
 #else
             set { }
@@ -463,7 +463,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
 
             RenderGraph.RenderGraphExceptionMessages.enableCaller = true;
 
-#if !UNITY_EDITOR && DEVELOPMENT_BUILD
+#if !UNITY_EDITOR && UNITY_ENABLE_CHECKS
             if (RenderGraphDebugSession.currentDebugSession == null)
                 RenderGraphDebugSession.Create<RenderGraphPlayerRemoteDebugSession>();
 #endif
@@ -984,42 +984,42 @@ namespace UnityEngine.Rendering.RenderGraphModule
             return m_Resources.ImportRayTracingAccelerationStructure(accelStruct, name);
         }
 
-        [Conditional("DEVELOPMENT_BUILD"), Conditional("UNITY_EDITOR")]
+        [Conditional("UNITY_ENABLE_CHECKS")]
         void CheckNotUsedWhenExecuting()
         {
             if (enableValidityChecks && m_RenderGraphState == RenderGraphState.Executing)
                 throw new InvalidOperationException(RenderGraphExceptionMessages.GetExceptionMessage(RenderGraphState.Executing));
         }
 
-        [Conditional("DEVELOPMENT_BUILD"), Conditional("UNITY_EDITOR")]
+        [Conditional("UNITY_ENABLE_CHECKS")]
         void CheckNotUsedWhenRecordingGraph()
         {
             if (enableValidityChecks && m_RenderGraphState == RenderGraphState.RecordingGraph)
                 throw new InvalidOperationException(RenderGraphExceptionMessages.GetExceptionMessage(RenderGraphState.RecordingGraph));
         }
 
-        [Conditional("DEVELOPMENT_BUILD"), Conditional("UNITY_EDITOR")]
+        [Conditional("UNITY_ENABLE_CHECKS")]
         void CheckNotUsedWhenRecordPassOrExecute()
         {
             if (enableValidityChecks && (m_RenderGraphState == RenderGraphState.RecordingPass || m_RenderGraphState == RenderGraphState.Executing))
                 throw new InvalidOperationException(RenderGraphExceptionMessages.GetExceptionMessage(RenderGraphState.RecordingPass | RenderGraphState.Executing));
         }
 
-        [Conditional("DEVELOPMENT_BUILD"), Conditional("UNITY_EDITOR")]
+        [Conditional("UNITY_ENABLE_CHECKS")]
         void CheckNotUsedWhenRecordingPass()
         {
             if (enableValidityChecks && m_RenderGraphState == RenderGraphState.RecordingPass)
                 throw new InvalidOperationException(RenderGraphExceptionMessages.GetExceptionMessage(RenderGraphState.RecordingPass));
         }
 
-        [Conditional("DEVELOPMENT_BUILD"), Conditional("UNITY_EDITOR")]
+        [Conditional("UNITY_ENABLE_CHECKS")]
         void CheckNotUsedWhenActive()
         {
             if (enableValidityChecks && (m_RenderGraphState & RenderGraphState.Active) != RenderGraphState.Idle)
                 throw new InvalidOperationException(RenderGraphExceptionMessages.GetExceptionMessage(RenderGraphState.Active));
         }
 
-        [Conditional("DEVELOPMENT_BUILD"), Conditional("UNITY_EDITOR")]
+        [Conditional("UNITY_ENABLE_CHECKS")]
         void CheckNotUsedWhenIdle()
         {
             if (enableValidityChecks && m_RenderGraphState == RenderGraphState.Idle)
@@ -1041,8 +1041,9 @@ namespace UnityEngine.Rendering.RenderGraphModule
         public IRasterRenderGraphBuilder AddRasterRenderPass<PassData>(string passName, out PassData passData
 #if !CORE_PACKAGE_DOCTOOLS
             , [CallerFilePath] string file = "",
-            [CallerLineNumber] int line = 0) where PassData : class, new()
+            [CallerLineNumber] int line = 0
 #endif
+            ) where PassData : class, new()
         {
             return AddRasterRenderPass(passName, out passData, GetDefaultProfilingSampler(passName), file, line);
         }
@@ -1060,8 +1061,9 @@ namespace UnityEngine.Rendering.RenderGraphModule
         public IRasterRenderGraphBuilder AddRasterRenderPass<PassData>(string passName, out PassData passData, ProfilingSampler sampler
 #if !CORE_PACKAGE_DOCTOOLS
             ,[CallerFilePath] string file = "",
-            [CallerLineNumber] int line = 0) where PassData : class, new()
+            [CallerLineNumber] int line = 0
 #endif
+            ) where PassData : class, new()
         {
             CheckNotUsedWhenRecordingPass();
 
@@ -1096,8 +1098,9 @@ namespace UnityEngine.Rendering.RenderGraphModule
         public IComputeRenderGraphBuilder AddComputePass<PassData>(string passName, out PassData passData
 #if !CORE_PACKAGE_DOCTOOLS
         , [CallerFilePath] string file = "",
-        [CallerLineNumber] int line = 0) where PassData : class, new()
+        [CallerLineNumber] int line = 0
 #endif
+            ) where PassData : class, new()
         {
             return AddComputePass(passName, out passData, GetDefaultProfilingSampler(passName), file, line);
         }
@@ -1115,8 +1118,9 @@ namespace UnityEngine.Rendering.RenderGraphModule
         public IComputeRenderGraphBuilder AddComputePass<PassData>(string passName, out PassData passData, ProfilingSampler sampler
 #if !CORE_PACKAGE_DOCTOOLS
             ,[CallerFilePath] string file = "",
-            [CallerLineNumber] int line = 0) where PassData : class, new()
+            [CallerLineNumber] int line = 0
 #endif
+            ) where PassData : class, new()
         {
             CheckNotUsedWhenRecordingPass();
 
@@ -1157,8 +1161,9 @@ namespace UnityEngine.Rendering.RenderGraphModule
         public IUnsafeRenderGraphBuilder AddUnsafePass<PassData>(string passName, out PassData passData
 #if !CORE_PACKAGE_DOCTOOLS
             , [CallerFilePath] string file = "",
-            [CallerLineNumber] int line = 0) where PassData : class, new()
+            [CallerLineNumber] int line = 0
 #endif
+            ) where PassData : class, new()
         {
             return AddUnsafePass(passName, out passData, GetDefaultProfilingSampler(passName), file, line);
         }
@@ -1182,8 +1187,9 @@ namespace UnityEngine.Rendering.RenderGraphModule
         public IUnsafeRenderGraphBuilder AddUnsafePass<PassData>(string passName, out PassData passData, ProfilingSampler sampler
 #if !CORE_PACKAGE_DOCTOOLS
             , [CallerFilePath] string file = "",
-            [CallerLineNumber] int line = 0) where PassData : class, new()
+            [CallerLineNumber] int line = 0
 #endif
+            ) where PassData : class, new()
         {
             CheckNotUsedWhenRecordingPass();
 
@@ -1250,7 +1256,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
             // With the actual implementation of the Frame Debugger, we cannot re-use resources during the same frame
             // or it breaks the rendering of the pass preview, since the FD copies the texture after the execution of the RG.
             // When disabled, this mode prevents resources released in the current frame from being reused until the next frame.
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if UNITY_ENABLE_CHECKS
             bool enableMemoryAliasing = !FrameDebugger.enabled;
 #else
             bool enableMemoryAliasing = true;
@@ -1317,7 +1323,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
             m_ExecutionExceptionWasRaised = false;
             m_RenderGraphState = RenderGraphState.Executing;
 
-#if DEVELOPMENT_BUILD || UNITY_EDITOR
+#if UNITY_ENABLE_CHECKS
                 if (m_RenderGraphContext.cmd == null)
                     throw new InvalidOperationException("RenderGraph.BeginRecording was not called before executing the render graph.");
 
@@ -1333,7 +1339,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
 
             m_Resources.BeginExecute(m_CurrentFrameIndex);
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+#if UNITY_ENABLE_CHECKS
             // Feeding Render Graph Viewer before resource deallocation at pass execution
             GenerateDebugData(graphHash);
 #endif
@@ -1497,9 +1503,9 @@ namespace UnityEngine.Rendering.RenderGraphModule
 
         ProfilingSampler GetDefaultProfilingSampler(string name)
         {
-            // In non-dev builds, ProfilingSampler.Get returns null, so we'd always end up executing this.
+            // In the Release managed code variant, ProfilingSampler.Get returns null, so we'd always end up executing this.
             // To avoid that we also ifdef the code out here.
-#if DEVELOPMENT_BUILD || UNITY_EDITOR
+#if UNITY_INCLUDE_INSTRUMENTATION
             int hash = name.GetHashCode();
             if (!m_DefaultProfilingSamplers.TryGetValue(hash, out var sampler))
             {
@@ -1689,7 +1695,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
     [MovedFrom(true, "UnityEngine.Experimental.Rendering.RenderGraphModule", "UnityEngine.Rendering.RenderGraphModule")]
     public struct RenderGraphProfilingScope : IDisposable
     {
-#if DEVELOPMENT_BUILD || UNITY_EDITOR
+#if UNITY_INCLUDE_INSTRUMENTATION
         ProfilingSampler m_Sampler;
         RenderGraph m_RenderGraph;
         bool m_Disposed;
@@ -1702,7 +1708,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
         /// <param name="sampler">Profiling Sampler to be used for this scope.</param>
         public RenderGraphProfilingScope(RenderGraph renderGraph, ProfilingSampler sampler)
         {
-#if DEVELOPMENT_BUILD || UNITY_EDITOR
+#if UNITY_INCLUDE_INSTRUMENTATION
             m_RenderGraph = renderGraph;
             m_Sampler = sampler;
             m_Disposed = false;
@@ -1721,7 +1727,7 @@ namespace UnityEngine.Rendering.RenderGraphModule
         // Protected implementation of Dispose pattern.
         void Dispose(bool disposing)
         {
-#if DEVELOPMENT_BUILD || UNITY_EDITOR
+#if UNITY_INCLUDE_INSTRUMENTATION
             if (m_Disposed)
                 return;
 

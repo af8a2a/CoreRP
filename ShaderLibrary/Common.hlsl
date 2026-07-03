@@ -216,13 +216,11 @@
 
 // Include language header
 #if defined (SHADER_API_GAMECORE)
-#include "Packages/com.unity.render-pipelines.gamecore/ShaderLibrary/API/GameCore.hlsl"
-#elif defined(SHADER_API_XBOXONE)
-#include "Packages/com.unity.render-pipelines.xboxone/ShaderLibrary/API/XBoxOne.hlsl"
+#include "UnityPlatforms/GameCore/ShaderLibrary/API/GameCore.hlsl"
 #elif defined(SHADER_API_PS4)
-#include "Packages/com.unity.render-pipelines.ps4/ShaderLibrary/API/PSSL.hlsl"
+#include "UnityPlatforms/PS4/ShaderLibrary/API/PSSL.hlsl"
 #elif defined(SHADER_API_PS5)
-#include "Packages/com.unity.render-pipelines.ps5/ShaderLibrary/API/PSSL.hlsl"
+#include "UnityPlatforms/PS5/ShaderLibrary/API/PSSL.hlsl"
 #elif defined(SHADER_API_D3D11)
 #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/API/D3D11.hlsl"
 #elif defined(SHADER_API_METAL)
@@ -672,12 +670,12 @@ float SanitizePositiveFinite(float x)
 
 real DegToRad(real deg)
 {
-    return deg * (PI / 180.0);
+    return deg * (real)(PI / 180.0);
 }
 
 real RadToDeg(real rad)
 {
-    return rad * (180.0 / PI);
+    return rad * (real)(180.0 / PI);
 }
 
 // Square functions for cleaner code
@@ -707,7 +705,7 @@ real FastACos(real inX)
 {
     real res = FastACosPos(inX);
 
-    return (inX >= 0) ? res : PI - res; // Undo range reduction
+    return (inX >= 0) ? res : (real)(PI - res); // Undo range reduction
 }
 
 // Same cost as Acos + 1 FR

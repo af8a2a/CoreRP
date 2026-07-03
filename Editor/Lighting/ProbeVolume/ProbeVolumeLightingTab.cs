@@ -1,4 +1,4 @@
-#if ENABLE_UIELEMENTS_MODULE && (UNITY_EDITOR || DEVELOPMENT_BUILD)
+#if ENABLE_UIELEMENTS_MODULE && UNITY_ENABLE_CHECKS
 #define ENABLE_RENDERING_DEBUGGER_UI
 #endif
 
@@ -296,7 +296,7 @@ namespace UnityEngine.Rendering
             var debugWindow = EditorWindow.GetWindow<DebugWindow>();
             debugWindow.titleContent = DebugWindow.s_TitleContent;
             debugWindow.Show();
-            DebugManager.instance.RequestEditorWindowPanel(ProbeReferenceVolume.k_DebugPanelName);
+            DebugManager.instance.RequestPanelSelection(ProbeReferenceVolume.k_DebugPanelName);
 #endif
         }
 
