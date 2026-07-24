@@ -325,7 +325,7 @@ namespace UnityEngine.Rendering
             if (AdaptiveProbeVolumes.isRunning)
             {
                 if (GUILayout.Button(Styles.cancelBake, Styles.buttonStyle))
-                    AdaptiveProbeVolumes.Cancel();
+                    EditorApplication.delayCall += () => AdaptiveProbeVolumes.Cancel();
                 return;
             }
 
@@ -347,7 +347,11 @@ namespace UnityEngine.Rendering
             m_SingleSceneMode = EditorGUILayout.Popup(Styles.bakingMode, m_SingleSceneMode ? 0 : 1, Styles.bakingModeOptions) == 0;
             if (EditorGUI.EndChangeCheck() && !m_SingleSceneMode)
             {
-                if (activeSet != null) { EditorUtility.SetDirty(activeSet); activeSet.singleSceneMode = false; }
+                if (activeSet != null)
+                {
+                    EditorUtility.SetDirty(activeSet);
+                    activeSet.singleSceneMode = false;
+                }
                 SaveTempBakingSetIfNeeded();
             }
 
@@ -357,11 +361,14 @@ namespace UnityEngine.Rendering
                 return;
             }
 
-            EditorGUI.BeginChangeCheck();
             var newSet = ObjectFieldWithNew(Styles.currentBakingSet, activeSet, CreateBakingSet);
-            if (EditorGUI.EndChangeCheck())
+            if (newSet != activeSet)
             {
-                if (newSet != null) { EditorUtility.SetDirty(newSet); newSet.singleSceneMode = false; }
+                if (newSet != null)
+                {
+                    EditorUtility.SetDirty(newSet);
+                    newSet.singleSceneMode = false;
+                }
                 activeSet = newSet;
 
                 ProbeReferenceVolume.instance.Clear();
@@ -881,7 +888,7 @@ namespace UnityEngine.Rendering
             if (AdaptiveProbeVolumes.isRunning)
             {
                 if (GUILayout.Button(Styles.cancelBake))
-                    AdaptiveProbeVolumes.Cancel();
+                    EditorApplication.delayCall += () => AdaptiveProbeVolumes.Cancel();
             }
             else
             {

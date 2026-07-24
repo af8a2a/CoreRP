@@ -1568,7 +1568,7 @@ namespace UnityEngine.Rendering
 
             int accesses = 0;
             Dictionary<int, CacheEntry> cache = new();
-            ObjectPool<CacheEntry> m_BrickMetaPool = new ObjectPool<CacheEntry>(x => x.map.Clear(), null, false);
+            UnityEngine.Pool.ObjectPool<CacheEntry> m_BrickMetaPool = new UnityEngine.Pool.ObjectPool<CacheEntry>(() => new CacheEntry(), x => x.map.Clear(), null, null, false);
 
             CacheEntry BuildMap(in BakingCell cell)
             {
@@ -1930,7 +1930,7 @@ namespace UnityEngine.Rendering
             if (Lightmapping.isRunning || AdaptiveProbeVolumes.isRunning || !PrepareBaking(BakeType.ApvOnly, DoProbePlacement, AdditionalGIBakeRequestsManager.GetProbeNormalizationRequests))
                 return false;
 
-            _asyncBakeTaskId = Progress.Start("Bake Adaptive Probe Volumes");
+            _asyncBakeTaskId = Progress.Start("Bake Adaptive Probe Volumes", options: Progress.Options.Synchronous);
             Progress.RegisterCancelCallback(_asyncBakeTaskId, () =>
             {
                 OnBakeCancelled();

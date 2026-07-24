@@ -1,7 +1,7 @@
 #ifndef SURFACE_CACHE_PATCH_UTIL
 #define SURFACE_CACHE_PATCH_UTIL
 
-#include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Macros.hlsl"
+#include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Common.hlsl"
 #include "VectorLogic.hlsl"
 #include "Common.hlsl"
 #include "RingBuffer.hlsl"
@@ -56,7 +56,7 @@ namespace PatchUtil
         // Layout
         // 0x000000FF: Update count.
         // 0x0000FF00: Rank.
-        // 0xFFFF0000: Last access frame.
+        // 0xFFFF0000: Heartbeat.
         uint data;
     };
 
@@ -74,6 +74,7 @@ namespace PatchUtil
         float3 targetPos;
         StructuredBuffer<int3> cascadeOffsets;
         uint cascadeCount;
+        bool patchWarping;
     };
 
     uint ModuloDistance(uint a, uint b, uint modulo)
@@ -82,14 +83,14 @@ namespace PatchUtil
         return min(dif, modulo - dif);
     }
 
-    uint GetFramesSinceLastAccess(uint currentFrameIdx, uint patchLastAccessFrame)
+    uint GetFramesSinceHeartbeat(uint currentFrameIdx, uint patchHeartbeat)
     {
-        // Here we take into account that last access frame index is in [0, 2^16-1].
+        // Here we take into account that heartbeat frame index is in [0, 2^16-1].
         // We use that the last frame index can never be later than current frame index.
         const uint modulo = 65536; // 2^16
         return ModuloDistance(
             currentFrameIdx % modulo,
-            patchLastAccessFrame,
+            patchHeartbeat,
             modulo);
     }
 
@@ -113,7 +114,7 @@ namespace PatchUtil
         set.data = (rank << 8) | (set.data & 0xFFFF00FF);
     }
 
-    uint GetLastAccessFrame(PatchCounterSet set)
+    uint GetHeartbeat(PatchCounterSet set)
     {
         return set.data >> 16;
     }
@@ -123,9 +124,9 @@ namespace PatchUtil
         set.data = updateCount | (set.data & 0xFFFFFF00);
     }
 
-    void SetLastAccessFrame(inout PatchCounterSet set, uint lastAccessFrame)
+    void SetHeartbeat(inout PatchCounterSet set, uint heartbeat)
     {
-        set.data = (lastAccessFrame << 16) | (set.data & 0xFFFF);
+        set.data = (heartbeat << 16) | (set.data & 0xFFFF);
     }
 
     bool IsEqual(PatchCounterSet a, PatchCounterSet b)
@@ -133,16 +134,43 @@ namespace PatchUtil
         return a.data == b.data;
     }
 
-    void WriteLastFrameAccess(RWStructuredBuffer<PatchUtil::PatchStatisticsSet> statisticsSets, uint patchIdx, uint frameIdx)
+    void UpdateHeartbeat(RWStructuredBuffer<PatchUtil::PatchStatisticsSet> statisticsSets, uint patchIdx, uint frameIdx)
     {
         PatchCounterSet counterSet = statisticsSets[patchIdx].counters;
-        SetLastAccessFrame(counterSet, frameIdx);
+        SetHeartbeat(counterSet, frameIdx);
         statisticsSets[patchIdx].counters = counterSet;
     }
 
     float GetVoxelSize(float voxelMinSize, uint cascadeIdx)
     {
         return voxelMinSize * (1u << cascadeIdx);
+    }
+
+    // Surfaces sitting exactly on a voxel boundary (e.g. a floor at y = 0) flicker because
+    // floating-point noise flips neighboring samples between the two bordering cells. We displace
+    // the position by a continuous, world-anchored wave before quantizing, so nearby samples (and
+    // the same point across frames) resolve to a consistent voxel. Each axis is displaced by a
+    // function of the *other* two, so axis-aligned planes still vary across their surface, and the
+    // wave is quasi-periodic (a sum of incommensurate sines) to avoid collapsing into a regular
+    // lattice. This mitigates rather than fully fixes the ambiguity.
+    // See https://history.siggraph.org/learning/advances-in-spatial-hashing-a-pragmatic-approach-towards-robust-real-time-light-transport-simulation-by-gautron/
+    float QuasiPeriodicWave(float t)
+    {
+        const float3 waves = sin(float3(t, 2.19f * t + 1.7f, 3.73f * t + 4.2f));
+        return (waves.x + waves.y + waves.z) * (1.0f / 3.0f);
+    }
+
+    float3 GetVoxelWarpOffset(float3 queryPos, float voxelSize)
+    {
+        const float waveStrength = 0.01f;
+        const float waveFrequency = 0.01f;
+        // Base frequency in radians per voxel, with a different irrational multiplier per axis.
+        const float3 axisFrequency = waveFrequency * float3(1.0f, 1.41421356f, 1.73205081f);
+        const float3 phase = queryPos / voxelSize * axisFrequency;
+        const float3 wave = float3(QuasiPeriodicWave(phase.x), QuasiPeriodicWave(phase.y), QuasiPeriodicWave(phase.z));
+        const float3 offset = float3(wave.y + wave.z, wave.z + wave.x, wave.x + wave.y);
+        // Each QuasiPeriodicWave is in [-1, 1], so their sum is in [-2, 2]; 0.5 keeps the max displacement at waveStrength voxels.
+        return offset * (0.5f * waveStrength * voxelSize);
     }
 
     float2 OctWrap(float2 v)
@@ -242,8 +270,12 @@ namespace PatchUtil
             if (IsInsideCascade(volumeParams.targetPos, queryPos, cascadeVoxelSize, volumeParams.spatialResolution))
             {
                 const int3 cascadeOffset = volumeParams.cascadeOffsets[cascadeIdx];
-                const float3 centerRelativePositionVolumeSpace = queryPos / cascadeVoxelSize - cascadeOffset;
-                resolution.positionVolumeSpace = centerRelativePositionVolumeSpace + halfVolumeSize;
+                float3 warpedQueryPos = queryPos;
+                if (volumeParams.patchWarping)
+                    warpedQueryPos += GetVoxelWarpOffset(queryPos, cascadeVoxelSize);
+                const float3 centerRelativePositionVolumeSpace = warpedQueryPos / cascadeVoxelSize - cascadeOffset;
+                const int3 positionVolumeSpaceSigned = int3(centerRelativePositionVolumeSpace + halfVolumeSize);
+                resolution.positionVolumeSpace = uint3(clamp(positionVolumeSpaceSigned, 0, int(volumeParams.spatialResolution) - 1));
                 resolution.cascadeIdx = cascadeIdx;
                 break;
             }
@@ -335,6 +367,7 @@ namespace PatchUtil
         bool resultBool = false;
         const uint patchIdx = cellPatchIndices[cellIdx];
         resultIrradiance = (SphericalHarmonics::RGBL1)0; // Setting value only to silence shader compilation warning.
+        UNITY_OUT_OF_BOUNDS_BRANCH
         if (patchIdx != invalidPatchIndex)
         {
             resultIrradiance = patchIrradiances[patchIdx];
@@ -346,6 +379,7 @@ namespace PatchUtil
     uint FindPatchIndex(VolumeParamSet volumeParams, CellPatchIndexBufferType cellPatchIndices, float3 worldPosition, float3 worldNormal)
     {
         VolumePositionResolution posResolution = ResolveVolumePosition(worldPosition, volumeParams);
+        UNITY_OUT_OF_BOUNDS_BRANCH
         if (posResolution.isValid())
         {
             const uint directionIdx = GetDirectionIndex(worldNormal, volumeAngularResolution);
@@ -365,16 +399,6 @@ namespace PatchUtil
         {
             return invalidPatchIndex;
         }
-    }
-
-    uint FindPatchIndexAndUpdateLastAccess(VolumeParamSet volumeParams, CellPatchIndexBufferType cellPatchIndices, RWStructuredBuffer<PatchUtil::PatchStatisticsSet> patchStatisticSets, float3 worldPosition, float3 worldNormal, uint frameIdx)
-    {
-        const uint patchIdx = FindPatchIndex(volumeParams, cellPatchIndices, worldPosition, worldNormal);
-        if (patchIdx != invalidPatchIndex)
-        {
-            WriteLastFrameAccess(patchStatisticSets, patchIdx, frameIdx);
-        }
-        return patchIdx;
     }
 
     bool ReadHemisphericalIrradiance(PatchIrradianceBufferType patchIrradiances, CellPatchIndexBufferType cellPatchIndices, VolumeParamSet volumeParams, float3 worldPosition, float3 worldNormal, uint startCascadeIdx, out SphericalHarmonics::RGBL1 resultIrradiance)
@@ -451,7 +475,7 @@ namespace PatchUtil
         stats.mean = irradianceSeed;
         stats.variance = 0;
         Reset(stats.counters);
-        SetLastAccessFrame(stats.counters, frameIndex);
+        SetHeartbeat(stats.counters, frameIndex);
         SetRank(stats.counters, rank);
 
         return stats;
