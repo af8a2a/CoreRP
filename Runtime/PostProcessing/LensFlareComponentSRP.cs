@@ -13,7 +13,8 @@ namespace UnityEngine.Rendering
     /// </summary>
     [ExecuteAlways]
     [AddComponentMenu("Rendering/Lens Flare (SRP)")]
-    [CurrentPipelineHelpURL("shared/lens-flare/lens-flare-component")]
+    [PipelineHelpURL("UniversalRenderPipelineAsset", "urp/shared/lens-flare/lens-flare-component")]
+    [PipelineHelpURL("HDRenderPipelineAsset", "shared/lens-flare/lens-flare-component")]
     public sealed class LensFlareComponentSRP : MonoBehaviour
     {
         [SerializeField]
@@ -83,6 +84,7 @@ namespace UnityEngine.Rendering
         /// Please use useFogOpacityOcclusion instead.
         /// </summary>
         [Obsolete("Replaced by environmentOcclusion. #from(6000.0)")]
+        [NonSerialized]
         public bool useBackgroundCloudOcclusion = false;
 
         /// <summary>Enable occlusion from environment effects supported by the render pipeline. This may include opacity from volumetric clouds, background clouds, fog and water.</summary>
@@ -93,6 +95,7 @@ namespace UnityEngine.Rendering
         /// Enable Occlusion with Water
         /// </summary>
         [Obsolete("Replaced by environmentOcclusion. #from(6000.0)")]
+        [NonSerialized]
         public bool useWaterOcclusion = false;
         /// <summary>
         /// Radius around the light used to occlude the flare (value in world space)
@@ -123,6 +126,7 @@ namespace UnityEngine.Rendering
         /// Please use useFogOpacityOcclusion instead.
         /// </summary>
         [Obsolete("Please use environmentOcclusion instead. #from(6000.0)")]
+        [NonSerialized]
         public bool volumetricCloudOcclusion = false;
 
         /// Our default celestial body will have an angular radius of 3.3 degrees. This is an arbitrary number, but must be kept constant

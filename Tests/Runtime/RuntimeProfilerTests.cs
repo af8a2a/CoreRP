@@ -27,25 +27,13 @@ namespace UnityEngine.Rendering.Tests
             if (GraphicsSettings.currentRenderPipeline == null)
                 Assert.Ignore("No active Render Pipeline is set, skipping test.");
 
-            // HACK #1 - really shouldn't have to do this here, but previous tests are leaking gameobjects
-#pragma warning disable CS0618 // Type or member is obsolete
-            var objects = GameObject.FindObjectsByType<GameObject>(FindObjectsSortMode.InstanceID);
-#pragma warning restore CS0618 // Type or member is obsolete
-            foreach (var o in objects)
-            {
-                // HACK #2 - must not destroy DebugUpdater
-                if (o.GetComponent<DebugUpdater>() == null)
-                    CoreUtils.Destroy(o);
-            }
-
             m_DebugFrameTiming = new DebugFrameTiming();
         }
 
         [TearDown]
         public void TearDown()
         {
-            if (m_ToCleanup != null)
-                CoreUtils.Destroy(m_ToCleanup);
+            CoreUtils.Destroy(m_ToCleanup);
         }
 
         protected IEnumerator Warmup()
@@ -70,10 +58,21 @@ namespace UnityEngine.Rendering.Tests
                 supportsGpuFrameTime = false; // Linux + OpenGLCore
             if (Application.platform == RuntimePlatform.WebGLPlayer)
                 supportsGpuFrameTime = false; // WebGL/WebGPU
+            if ((Application.platform == RuntimePlatform.EmbeddedLinuxArm64 || Application.platform == RuntimePlatform.EmbeddedLinuxX64) && SystemInfo.graphicsDeviceType == GraphicsDeviceType.OpenGLES3)
+                supportsGpuFrameTime = false; // EmbeddedLinux GLES (no GL_EXT_disjoint_timer_query)
 #if ENABLE_VR && ENABLE_XR_MODULE
             if (XRSettings.enabled)
                 supportsGpuFrameTime = false; // XR
 #endif
+            // UGK-3010: zero on every UGK graphics API, not just Android/Metal.
+            if (IsForcedUGK())
+                supportsGpuFrameTime = false;
+
+            bool supportsMainThreadCpuFrameTime = true;
+
+            // UGK-2992
+            if (IsForcedUGK() && (Application.platform == RuntimePlatform.Switch || Application.platform == RuntimePlatform.Switch2))
+                supportsMainThreadCpuFrameTime = false;
 
             yield return Warmup();
 
@@ -97,15 +96,15 @@ namespace UnityEngine.Rendering.Tests
             // After k_NumFramesToRender frames, we should have a valid average for every headline counter.
             // A failure means the counter was zero on every captured frame. RenderThreadCPUFrameTime and
             // MainThreadCPUPresentWaitTime are excluded because they can legitimately be zero (modes without
-            // a separate render thread; no vsync / no frame rate cap). GPUFrameTime is only asserted on
-            // platforms known to report it (see supportsGpuFrameTime above).
+            // a separate render thread; no vsync / no frame rate cap). GPUFrameTime and
+            // MainThreadCPUFrameTime are only asserted where the platform reports them (see flags above).
             var avg = m_DebugFrameTiming.m_FrameHistory.SampleAverage;
             var zeroAvg = new System.Collections.Generic.List<string>();
             if (avg.FramesPerSecond <= 0f)
                 zeroAvg.Add(nameof(avg.FramesPerSecond));
             if (avg.FullFrameTime <= 0f)
                 zeroAvg.Add(nameof(avg.FullFrameTime));
-            if (avg.MainThreadCPUFrameTime <= 0f)
+            if (supportsMainThreadCpuFrameTime && avg.MainThreadCPUFrameTime <= 0f)
                 zeroAvg.Add(nameof(avg.MainThreadCPUFrameTime));
             if (supportsGpuFrameTime && avg.GPUFrameTime <= 0f)
                 zeroAvg.Add(nameof(avg.GPUFrameTime));
@@ -117,5 +116,9 @@ namespace UnityEngine.Rendering.Tests
                 $"GPUFrameTime={avg.GPUFrameTime} (asserted={supportsGpuFrameTime}), " +
                 $"MainThreadCPUPresentWaitTime={avg.MainThreadCPUPresentWaitTime}.");
         }
+
+        static bool IsForcedUGK() =>
+            System.Array.Exists(System.Environment.GetCommandLineArgs(),
+                arg => arg.Equals("-force-ugk", System.StringComparison.OrdinalIgnoreCase));
     }
 }

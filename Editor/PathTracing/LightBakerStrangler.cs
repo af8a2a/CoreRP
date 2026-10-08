@@ -59,6 +59,12 @@ namespace UnityEditor.PathTracing.LightBakerBridge
                     continue;
                 }
 
+                // Procedural terrain is not added to the acceleration structure as a mesh.
+                // The procedural instance handles ray intersection, and GBuffer generation
+                // uses the heightmap directly (g_InstanceGeometryIndex == -1).
+                if (fatInstance.IsProceduralTerrain)
+                    continue;
+
                 var instanceHandle = world.AddInstance(
                     fatInstance.Mesh,
                     fatInstance.Materials,
@@ -277,7 +283,9 @@ namespace UnityEditor.PathTracing.LightBakerBridge
                         fatInstance.LocalToWorldMatrix,
                         fatInstance.ReceiveShadows,
                         fatInstance.LodIdentifier,
-                        bakeInputInstanceIndex);
+                        bakeInputInstanceIndex,
+                        fatInstance.IsProceduralTerrain,
+                        fatInstance.TerrainIndex);
                     ++instanceCounter;
                 }
 
@@ -325,7 +333,8 @@ namespace UnityEditor.PathTracing.LightBakerBridge
 
                 // Setup ray tracing context
                 RayTracingBackend backend = integrationSettings.Backend;
-                Debug.Assert(RayTracingContext.IsBackendSupported(backend), $"Backend {backend} is not supported!");
+                const CapabilityMask requiredCaps = CapabilityMask.RayTracingShaders | CapabilityMask.RayTracingDispatchIndirect;
+                Debug.Assert(RayTracingContext.GetCapabilities(backend).HasFlag(requiredCaps), $"Backend {backend} is not supported!");
                 RayTracingResources rayTracingResources = new RayTracingResources();
                 rayTracingResources.Load();
                 using var rayTracingContext = new RayTracingContext(backend, rayTracingResources);
@@ -355,7 +364,7 @@ namespace UnityEditor.PathTracing.LightBakerBridge
 
                 // Build world with extracted data
                 const bool emissiveSampling = true;
-                world.PathTracingWorld.Build(sceneBounds, deviceContext.GetCommandBuffer(), ref world.ScratchBuffer, samplingResources, emissiveSampling, 1024, (int)bakeInput.lightingSettings.lightGridMaxCells);
+                world.PathTracingWorld.Build(sceneBounds, deviceContext.GetCommandBuffer(), ref world.ScratchBuffer, samplingResources, emissiveSampling, 128, (int)bakeInput.lightingSettings.lightGridMaxCells);
 
                 LightmapBakeSettings lightmapBakeSettings = GetLightmapBakeSettings(in bakeInput.lightingSettings, world.PathTracingWorld);
                 // Build array of lightmap descriptors based on the atlassing data and instances.
@@ -461,9 +470,11 @@ namespace UnityEditor.PathTracing.LightBakerBridge
 
         private static IntegrationSettings GetIntegrationSettings(in BakeInput bakeInput)
         {
+            const CapabilityMask requiredCaps = CapabilityMask.RayTracingShaders | CapabilityMask.RayTracingDispatchIndirect;
             var retVal = IntegrationSettings.Default;
             retVal.Backend =
-                bakeInput.lightingSettings.useHardwareRayTracing && RayTracingContext.IsBackendSupported(RayTracingBackend.Hardware) ?
+                bakeInput.lightingSettings.useHardwareRayTracing &&
+                RayTracingContext.GetCapabilities(RayTracingBackend.Hardware).HasFlag(requiredCaps) ?
                     RayTracingBackend.Hardware : RayTracingBackend.Compute;
 
             return retVal;
@@ -919,6 +930,17 @@ namespace UnityEditor.PathTracing.LightBakerBridge
             lightmappingContext.IntegratorContext.LightmapDirectBRDFIntegrator.SetupLightSamplingKeywords(cmd, lightmapBakeSettings.DirectEmissiveSamplingMode);
             lightmappingContext.IntegratorContext.LightmapIndirectIntegrator.SetupLightSamplingKeywords(cmd, lightmapBakeSettings.IndirectLightSamplingMode, lightmapBakeSettings.IndirectEmissiveSamplingMode);
 
+            // Setup terrain ray marching keyword
+            bool hasTerrains = world.PathTracingWorld.HasTerrains();
+            lightmappingContext.IntegratorContext.LightmapDirectIntegrator.SetTerrainKeyword(cmd, hasTerrains);
+            lightmappingContext.IntegratorContext.LightmapDirectBRDFIntegrator.SetTerrainKeyword(cmd, hasTerrains);
+            lightmappingContext.IntegratorContext.LightmapIndirectIntegrator.SetTerrainKeyword(cmd, hasTerrains);
+            lightmappingContext.IntegratorContext.LightmapAOIntegrator.SetTerrainKeyword(cmd, hasTerrains);
+            lightmappingContext.IntegratorContext.LightmapValidityIntegrator.SetTerrainKeyword(cmd, hasTerrains);
+            lightmappingContext.IntegratorContext.LightmapShadowMaskIntegrator.SetTerrainKeyword(cmd, hasTerrains);
+            lightmappingContext.IntegratorContext.GBufferDebugShader.SetTerrainKeyword(cmd, hasTerrains);
+            Util.SetTerrainRayMarchingKeyword(cmd, lightmappingContext.IntegratorContext.GBufferShader, hasTerrains);
+
             // Chart identification happens in multithreaded fashion on the CPU. We start it immediately so it can run in tandem with other work.
             bool usesChartIdentification = AnyLightmapRequestHasOutput(lightmapRequestData.requests, LightmapRequestOutputType.ChartIndex) ||
                                            AnyLightmapRequestHasOutput(lightmapRequestData.requests, LightmapRequestOutputType.OverlapPixelIndex);
@@ -995,6 +1017,7 @@ namespace UnityEditor.PathTracing.LightBakerBridge
                         lightmappingContext.ClearOutputs();
 
                         IRayTracingShader normalShader = lightmapResourceLib.NormalAccumulationShader;
+                        Util.SetTerrainRayMarchingKeyword(cmd, normalShader, hasTerrains);
                         GraphicsBuffer compactedGBufferLength = lightmappingContext.CompactedGBufferLength;
                         GraphicsBuffer indirectDispatchBuffer = lightmappingContext.IndirectDispatchBuffer;
                         GraphicsBuffer indirectRayTracingDispatchBuffer = lightmappingContext.IndirectDispatchRayTracingBuffer;
@@ -1018,7 +1041,9 @@ namespace UnityEditor.PathTracing.LightBakerBridge
                                 return Result.AddResourcesToCacheFailure;
 
                             InstanceHandle[] currentLodInstances = PrepareLodInstances(cmd, lightmappingContext.World, bakeInstance, lodInstances, lodgroupToContributorInstances, false);
-                            var instanceGeometryIndex = lightmappingContext.World.PathTracingWorld.GetAccelerationStructure().GeometryPool.GetInstanceGeometryIndex(bakeInstance.Mesh);
+                            var instanceGeometryIndex = bakeInstance.IsProceduralTerrain
+                                ? -1
+                                : lightmappingContext.World.PathTracingWorld.GetAccelerationStructure().GeometryPool.GetInstanceGeometryIndex(bakeInstance.Mesh);
 
                             uint instanceWidth = (uint)bakeInstance.TexelSize.x;
                             uint instanceHeight = (uint)bakeInstance.TexelSize.y;
@@ -1068,6 +1093,7 @@ namespace UnityEditor.PathTracing.LightBakerBridge
                                 // geometry pool bindings
                                 Util.BindAccelerationStructure(cmd, normalShader, world.PathTracingWorld.GetAccelerationStructure());
                                 Util.BindMaterialsAndTextures(cmd, normalShader, world.PathTracingWorld);
+                                world.PathTracingWorld.GetAccelerationStructure().BindTerrainResources(cmd, normalShader);
 
                                 var requiredSizeInBytes = normalShader.GetTraceScratchBufferRequiredSizeInBytes((uint)chunkSize, 1, 1);
                                 if (requiredSizeInBytes > 0)
@@ -1080,6 +1106,7 @@ namespace UnityEditor.PathTracing.LightBakerBridge
                                 normalShader.SetMatrixParam(cmd, LightmapIntegratorShaderIDs.ShaderLocalToWorld, bakeInstance.LocalToWorldMatrix);
                                 normalShader.SetMatrixParam(cmd, LightmapIntegratorShaderIDs.ShaderLocalToWorldNormals, bakeInstance.LocalToWorldMatrixNormals);
                                 normalShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.InstanceGeometryIndex, instanceGeometryIndex);
+                                normalShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.TerrainIndex, bakeInstance.TerrainIndex);
                                 normalShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.InstanceWidth, (int)instanceWidth);
 
                                 normalShader.SetBufferParam(cmd, LightmapIntegratorShaderIDs.GBuffer, lightmappingContext.GBuffer);
@@ -1093,7 +1120,7 @@ namespace UnityEditor.PathTracing.LightBakerBridge
                                 normalShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.SampleOffset, 0);
                                 normalShader.SetIntParam(cmd, LightmapIntegratorShaderIDs.MaxLocalSampleCount, 1);
                                 cmd.BeginSample("Normal Generation");
-                                normalShader.Dispatch(cmd, lightmappingContext.TraceScratchBuffer, indirectRayTracingDispatchBuffer);
+                                normalShader.DispatchIndirect(cmd, lightmappingContext.TraceScratchBuffer, indirectRayTracingDispatchBuffer);
                                 cmd.EndSample("Normal Generation");
 
                                 // copy back to the output

@@ -7,7 +7,7 @@ using Unity.Collections.LowLevel.Unsafe;
 
 namespace UnityEngine.Rendering.RenderGraphModule.NativeRenderPassCompiler
 {
-    // Wrapper struct to allow storing strings in a DynamicArray which requires a type with a parameterless constructor
+#if UNITY_ENABLE_CHECKS
     internal readonly struct Name
     {
         public readonly string name;
@@ -18,6 +18,7 @@ namespace UnityEngine.Rendering.RenderGraphModule.NativeRenderPassCompiler
             this.utf8ByteCount = ((name?.Length > 0) && computeUTF8ByteCount) ? System.Text.Encoding.UTF8.GetByteCount((ReadOnlySpan<char>)name) : 0;
         }
     }
+#endif
 
     // Helper extensions for NativeList
     internal static class NativeListExtensions
@@ -47,7 +48,9 @@ namespace UnityEngine.Rendering.RenderGraphModule.NativeRenderPassCompiler
         {
             fences = new Dictionary<int, GraphicsFence>();
             resources = new ResourcesData();
-            passNames = new DynamicArray<Name>(0, false); // T in NativeList<T> cannot contain managed types, so the names are stored separately
+#if UNITY_ENABLE_CHECKS
+            passNames = new DynamicArray<Name>(NativePassCompiler.k_EstimatedPassCount, false);
+#endif
         }
 
         void AllocateNativeDataStructuresIfNeeded(int estimatedNumPasses)
@@ -76,13 +79,14 @@ namespace UnityEngine.Rendering.RenderGraphModule.NativeRenderPassCompiler
         public void Initialize(RenderGraphResourceRegistry resourceRegistry, int estimatedNumPasses)
         {
             resources.Initialize(resourceRegistry);
-            passNames.Reserve(estimatedNumPasses, false);
+#if UNITY_ENABLE_CHECKS
+            passNames.Clear();
+#endif
             AllocateNativeDataStructuresIfNeeded(estimatedNumPasses);
         }
 
         public void Clear()
         {
-            passNames.Clear();
             resources.Clear();
 
             if (m_AreNativeListsAllocated)
@@ -130,7 +134,7 @@ namespace UnityEngine.Rendering.RenderGraphModule.NativeRenderPassCompiler
         public ref ResourceReaderData ResourceReader(in ResourceHandle h, int i)
         {
             int numReaders = resources[h].numReaders;
-#if DEVELOPMENT_BUILD || UNITY_EDITOR
+#if UNITY_ENABLE_CHECKS
             if (i >= numReaders)
             {
                 throw new Exception("Invalid reader id");
@@ -143,7 +147,9 @@ namespace UnityEngine.Rendering.RenderGraphModule.NativeRenderPassCompiler
         public NativeList<PassData> passData;
         public NativeList<PassData> compactedNonCulledRasterPasses;
         public Dictionary<int, GraphicsFence> fences;
+#if UNITY_ENABLE_CHECKS
         public DynamicArray<Name> passNames;
+#endif
 
         // Tightly packed lists all passes, add to these lists then index in it using offset+count
         public NativeList<PassInputData> inputData;
@@ -162,7 +168,7 @@ namespace UnityEngine.Rendering.RenderGraphModule.NativeRenderPassCompiler
         public bool TryAddToFragmentList(in TextureAccess access, int listFirstIndex, int numItems, out string errorMessage)
         {
             errorMessage = null;
-#if DEVELOPMENT_BUILD || UNITY_EDITOR
+#if UNITY_ENABLE_CHECKS
             if (access.textureHandle.handle.type != RenderGraphResourceType.Texture)
             {
                 errorMessage = RenderGraph.RenderGraphExceptionMessages.k_NonTextureAsAttachmentError;
@@ -174,7 +180,7 @@ namespace UnityEngine.Rendering.RenderGraphModule.NativeRenderPassCompiler
                 ref var fragment = ref fragmentData.ElementAt(i);
                 if (fragment.resource.index == access.textureHandle.handle.index)
                 {
-#if DEVELOPMENT_BUILD || UNITY_EDITOR
+#if UNITY_ENABLE_CHECKS
                     if (fragment.resource.version != access.textureHandle.handle.version)
                     {
                         //this would mean you're trying to attach say both v1 and v2 of a resource to the same pass as an attachment
@@ -199,14 +205,19 @@ namespace UnityEngine.Rendering.RenderGraphModule.NativeRenderPassCompiler
             return true;
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public Name GetFullPassName(int passId) => passNames[passId];
-
+#if UNITY_ENABLE_CHECKS
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public string GetPassName(int passId) => passNames[passId].name;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public string GetResourceName(in ResourceHandle h) => resources.resourceNames[h.iType][h.index].name;
+#else
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public string GetPassName(int passId) => "";
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public string GetResourceName(in ResourceHandle h) => "";
+#endif
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public string GetResourceVersionedName(in ResourceHandle h) => GetResourceName(h) + " V" + h.version;

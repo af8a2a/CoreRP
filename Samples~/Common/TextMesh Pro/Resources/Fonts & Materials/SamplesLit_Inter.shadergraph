@@ -4,6 +4,9 @@
     "m_ObjectId": "38952429f6894503ac3cb883f145aa32",
     "m_Properties": [
         {
+            "m_Id": "b7c9e2f10a3d4e5f8091a2b3c4d5e6f7"
+        },
+        {
             "m_Id": "153eaefba6fb45cc825c47c4f041a7c9"
         },
         {
@@ -1764,6 +1767,9 @@
     "m_Name": "",
     "m_ChildObjectList": [
         {
+            "m_Id": "b7c9e2f10a3d4e5f8091a2b3c4d5e6f7"
+        },
+        {
             "m_Id": "153eaefba6fb45cc825c47c4f041a7c9"
         },
         {
@@ -3423,3 +3429,30 @@
     }
 }
 
+{
+    "m_SGVersion": 1,
+    "m_Type": "UnityEditor.ShaderGraph.Internal.Vector1ShaderProperty",
+    "m_ObjectId": "b7c9e2f10a3d4e5f8091a2b3c4d5e6f7",
+    "m_Guid": {
+        "m_GuidSerialized": "b7c9e2f1-0a3d-4e5f-8091-a2b3c4d5e6f7"
+    },
+    "m_Name": "CullMode",
+    "m_DefaultRefNameVersion": 1,
+    "m_RefNameGeneratedByDisplayName": "CullMode",
+    "m_DefaultReferenceName": "_CullMode",
+    "m_OverrideReferenceName": "",
+    "m_GeneratePropertyBlock": true,
+    "m_UseCustomSlotLabel": false,
+    "m_CustomSlotLabel": "",
+    "m_DismissedVersion": 0,
+    "m_Precision": 0,
+    "overrideHLSLDeclaration": false,
+    "hlslDeclarationOverride": 0,
+    "m_Hidden": true,
+    "m_Value": 0.0,
+    "m_FloatType": 0,
+    "m_RangeValues": {
+        "x": 0.0,
+        "y": 1.0
+    }
+}

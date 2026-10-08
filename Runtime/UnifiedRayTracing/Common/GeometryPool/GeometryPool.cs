@@ -25,6 +25,18 @@ namespace UnityEngine.Rendering.UnifiedRayTracing
                 meshChunkTablesByteSize = 4 * 1024 * 1024
             };
         }
+
+        // Reserve a minimal pool in test contexts, Vulkan frees these allocations at the end of the
+        // frame, so when testing this can accumulate and result in an OOM crash.
+        public static GeometryPoolDesc NewMinimal()
+        {
+            return new GeometryPoolDesc()
+            {
+                vertexPoolByteSize = 1024 * 1024,
+                indexPoolByteSize = 256 * 1024,
+                meshChunkTablesByteSize = 64 * 1024
+            };
+        }
     }
 
     // Handle to a piece of geo. Geometry meshes registered are ref counted.
@@ -405,7 +417,7 @@ namespace UnityEngine.Rendering.UnifiedRayTracing
                 newSlot.meshChunkTableAlloc = m_MeshChunkTableAllocator.Allocate(mesh.subMeshCount);
                 if (!newSlot.meshChunkTableAlloc.valid)
                 {
-                    newSlot.meshChunkTableAlloc = m_MeshChunkTableAllocator.GrowAndAllocate(mesh.subMeshCount, (int)(GraphicsHelpers.MaxGraphicsBufferSizeInBytes / GetMeshChunkTableEntryByteSize()), out int oldCapacity, out int newCapacity);
+                    newSlot.meshChunkTableAlloc = m_MeshChunkTableAllocator.GrowAndAllocate(mesh.subMeshCount, GraphicsHelpers.MaxElementCount(GetMeshChunkTableEntryByteSize()), out int oldCapacity, out int newCapacity);
                     if (!newSlot.meshChunkTableAlloc.valid)
                         throw new UnifiedRayTracingException($"Can't allocate a GraphicsBuffer bigger than {GraphicsHelpers.MaxGraphicsBufferSizeInGigaBytes:F1}GB", UnifiedRayTracingError.GraphicsBufferAllocationFailed);
 
@@ -422,7 +434,7 @@ namespace UnityEngine.Rendering.UnifiedRayTracing
                     newMeshChunk.vertexAlloc = m_VertexAllocator.Allocate(submeshDescriptor.vertexCount);
                     if (!newMeshChunk.vertexAlloc.valid)
                     {
-                        newMeshChunk.vertexAlloc = m_VertexAllocator.GrowAndAllocate(submeshDescriptor.vertexCount, (int)(GraphicsHelpers.MaxGraphicsBufferSizeInBytes / GetVertexByteSize()), out int oldCapacity, out int newCapacity);
+                        newMeshChunk.vertexAlloc = m_VertexAllocator.GrowAndAllocate(submeshDescriptor.vertexCount, GraphicsHelpers.MaxElementCount(GetVertexByteSize()), out int oldCapacity, out int newCapacity);
                         if (!newMeshChunk.vertexAlloc.valid)
                             throw new UnifiedRayTracingException($"Can't allocate a GraphicsBuffer bigger than {GraphicsHelpers.MaxGraphicsBufferSizeInGigaBytes:F1}GB", UnifiedRayTracingError.GraphicsBufferAllocationFailed);
 
@@ -433,7 +445,7 @@ namespace UnityEngine.Rendering.UnifiedRayTracing
                     newMeshChunk.indexAlloc = m_IndexAllocator.Allocate(submeshDescriptor.indexCount);
                     if (!newMeshChunk.indexAlloc.valid)
                     {
-                        newMeshChunk.indexAlloc = m_IndexAllocator.GrowAndAllocate(submeshDescriptor.indexCount, (int)(GraphicsHelpers.MaxGraphicsBufferSizeInBytes / sizeof(int)), out int oldCapacity, out int newCapacity);
+                        newMeshChunk.indexAlloc = m_IndexAllocator.GrowAndAllocate(submeshDescriptor.indexCount, GraphicsHelpers.MaxElementCount(sizeof(int)), out int oldCapacity, out int newCapacity);
                         if (!newMeshChunk.indexAlloc.valid)
                             throw new UnifiedRayTracingException($"Can't allocate a GraphicsBuffer bigger than {GraphicsHelpers.MaxGraphicsBufferSizeInGigaBytes:F1}GB", UnifiedRayTracingError.GraphicsBufferAllocationFailed);
 
@@ -730,12 +742,11 @@ namespace UnityEngine.Rendering.UnifiedRayTracing
 
         private GraphicsBuffer LoadIndexBuffer(Mesh mesh)
         {
-            Debug.Assert((mesh.indexBufferTarget & GraphicsBuffer.Target.Raw) != 0 || (mesh.GetIndices(0) != null && mesh.GetIndices(0).Length != 0),
-                "Cant use a mesh buffer that is not raw and has no CPU index information.");
-
-            mesh.indexBufferTarget |= GraphicsBuffer.Target.Raw;
-            mesh.vertexBufferTarget |= GraphicsBuffer.Target.Raw;
+#if UNITY_EDITOR
+            Utils.EnsureMeshHasRawBufferTarget(mesh);
+#endif
             var idxBuffer = mesh.GetIndexBuffer();
+            Debug.Assert((idxBuffer.target & GraphicsBuffer.Target.Raw) != 0, "Mesh index buffer target must include Raw.");
             m_InputBufferReferences.Add(idxBuffer);
             return idxBuffer;
         }
@@ -758,7 +769,7 @@ namespace UnityEngine.Rendering.UnifiedRayTracing
             output.buffer = mesh.GetVertexBuffer(stream);
             m_InputBufferReferences.Add(output.buffer);
 
-            Assertions.Assert.IsTrue((output.buffer.target & GraphicsBuffer.Target.Raw) != 0);
+            Assertions.Assert.IsTrue((output.buffer.target & GraphicsBuffer.Target.Raw) != 0, "Mesh vertex buffer target must include Raw.");
         }
 
         private CommandBuffer AllocateCommandBuffer()

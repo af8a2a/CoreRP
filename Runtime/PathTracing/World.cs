@@ -345,7 +345,7 @@ namespace UnityEngine.PathTracing.Core
 
             _lightState = new LightState();
 
-            _cubemapRender = new CubemapRender(worldResources.SkyBoxMesh, worldResources.SixFaceSkyBoxMesh);
+            _cubemapRender = new CubemapRender(worldResources.SkyBoxMesh, worldResources.SixFaceSkyBoxMesh, worldResources.SolidColorShader);
             _cubemapRender.SetMode(CubemapRender.Mode.Material);
             _environmentSampling = new EnvironmentImportanceSampling(worldResources.EnvironmentImportanceSamplingBuild);
             _reservoirGrid = new RegirLightGrid(worldResources.BuildLightGridShader);
@@ -403,6 +403,11 @@ namespace UnityEngine.PathTracing.Core
             }
             environmentCDF = _environmentSampling.GetSkyboxCDF();
             return envTex;
+        }
+
+        public bool HasTerrains()
+        {
+            return _rayTracingAccelerationStructure.TerrainCount > 0;
         }
 
         public void BindLightAccelerationStructure(CommandBuffer cmd, IRayTracingShader shader)
@@ -566,6 +571,37 @@ namespace UnityEngine.PathTracing.Core
 
             if (enableEmissiveSampling && !ProcessEmissiveMeshes(instance, mesh, bounds, materials, isStatic, _rayTracingAccelerationStructure, _materialPool, filter, _lightState.MeshLights, _subMeshIndices))
                 LogError($"Failed to process emissive triangles in mesh {mesh.name}.");
+
+            return instance;
+        }
+
+        public InstanceHandle AddTerrainInstance(
+            short[] heightData,
+            int resolution,
+            Unity.Mathematics.float3 heightmapScale,
+            byte[] holeData,
+            int holeResolution,
+            MaterialHandle material,
+            uint mask,
+            uint renderingLayerMask,
+            in Matrix4x4 localToWorldMatrix)
+        {
+            uint materialIndex = 0;
+            if (material != MaterialHandle.Invalid)
+                _materialPool.GetMaterialInfo(material.Value, out materialIndex, out _);
+
+            InstanceHandle instance = _instanceHandleSet.Add();
+            _rayTracingAccelerationStructure.AddTerrainInstance(
+                instance.Value,
+                heightData,
+                resolution,
+                heightmapScale,
+                holeData,
+                holeResolution,
+                localToWorldMatrix,
+                materialIndex,
+                renderingLayerMask,
+                mask);
 
             return instance;
         }
